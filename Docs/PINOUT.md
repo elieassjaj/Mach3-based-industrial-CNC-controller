@@ -10,6 +10,7 @@ These pins are designated for high-speed pulse generation (up to 2 MHz) and must
 *   **STEP_A_PIN:** `PD3` (`GPIO_PIN_3`)
 *   **STEP_B_PIN:** `PD4` (`GPIO_PIN_4`)
 *   *Note:* The `STEP_PINS_MASK` is `(0x001F)` (Bits 0 to 4 for DMA BSRR transfers).
+*   *Note : **All STEP pins (PD0–PD4) are connected to one of the PWM generation outputs of the timers.**
 
 ## DIRECTION Pins (GPIOD 8..12)
 *   **DIR_X_PIN:** `PD8` (`GPIO_PIN_8`)
@@ -17,6 +18,9 @@ These pins are designated for high-speed pulse generation (up to 2 MHz) and must
 *   **DIR_Z_PIN:** `PD10` (`GPIO_PIN_10`)
 *   **DIR_A_PIN:** `PD11` (`GPIO_PIN_11`)
 *   **DIR_B_PIN:** `PD12` (`GPIO_PIN_12`)
+   
+## EN pin (GPIOD)
+* **EN_PIN:** `PD15` (`GPIO_PIN_15`)
 
 ## Peripherals & Outputs (GPIOB)
 *   **SPINDLE_PWM_PIN:** `PB4` (`GPIO_PIN_4`) — *Must be configured as TIM Alternate Function (e.g., TIM3_CH1) with a 10 kHz frequency.*
