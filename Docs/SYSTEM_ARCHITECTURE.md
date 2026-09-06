@@ -9,7 +9,7 @@ Mach3
   ▼
 PC Ethernet
   │
-  │ TCP/UDP ?
+  │ UDP
   ▼
 LAN8720A
   │ RMII
