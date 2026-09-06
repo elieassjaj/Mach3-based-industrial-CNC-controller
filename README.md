@@ -177,7 +177,7 @@ The Ethernet subsystem uses:
 
 The Ethernet subsystem is documented separately in:
 
-**[`ethernet.md`](ethernet.md)**
+**[`ethernet.md`](Docs/ethernet.md)**
 
 ### Communication Model
 
