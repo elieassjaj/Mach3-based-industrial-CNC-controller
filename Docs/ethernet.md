@@ -704,52 +704,238 @@ Motion Controller
 ```
 
 ---
-
-# 20. CoreXY Kinematics
+# 20. Five-Axis Motion Architecture
 
 [PROJECT-DECISION]
 
-The relevant X/Y motion system uses CoreXY kinematics.
+The CNC5AX-ETH controller uses **five independent motion axes**.
 
-The conceptual relationship is:
+The five axes are controlled independently, with each axis having its own motion command, direction control, and STEP pulse generation.
 
 ```text
-A = X + Y
-B = X - Y
+                         Motion Command
+                              │
+                              ▼
+                    ┌─────────────────────┐
+                    │   Motion Controller │
+                    └──────────┬──────────┘
+                               │
+             ┌─────────────────┼─────────────────┐
+             │                 │                 │
+             ▼                 ▼                 ▼
+          Axis 1            Axis 2            Axis 3
+          STEP/DIR          STEP/DIR          STEP/DIR
+             │                 │                 │
+             ▼                 ▼                 ▼
+          Driver 1           Driver 2           Driver 3
+
+
+             ┌─────────────────┼─────────────────┐
+             │                                   │
+             ▼                                   ▼
+          Axis 4                              Axis 5
+          STEP/DIR                            STEP/DIR
+             │                                   │
+             ▼                                   ▼
+          Driver 4                            Driver 5
 ```
 
-Depending on motor wiring and the project's sign convention, an equivalent sign-inverted formulation may be required.
+## 20.1 Independent Axis Control
 
-Therefore, the final firmware must define one authoritative kinematic convention.
+[PROJECT-DECISION]
+
+Each axis must have an independent control path.
+
+The motion-control layer is responsible for:
+
+- axis position
+- target position
+- direction
+- step generation
+- velocity
+- acceleration/deceleration
+- axis limits
+- axis enable/disable state
+- motion state
+
+The Ethernet/network layer should transport motion commands and data to the motion-control layer.
+
+It should not directly generate STEP pulses.
+
+---
+
+## 20.2 Network-to-Axis Data Flow
 
 [DESIGN-RECOMMENDATION]
 
-The Ethernet layer should transport logical coordinates.
-
-The CoreXY transformation should be performed in the motion-control layer.
+The intended software data flow is:
 
 ```text
-Network Packet
+Host Computer
+      │
+      │ Ethernet / UDP
+      ▼
+     LwIP
       │
       ▼
-Target X/Y
+Motion Protocol Parser
       │
       ▼
 Motion Controller
       │
-      ▼
-CoreXY Kinematics
+      ├──────────► Axis 1 ──► STEP/DIR
       │
-   ┌──┴──┐
-   ▼     ▼
-Motor A Motor B
-   │     │
-   ▼     ▼
-Hardware Timers
+      ├──────────► Axis 2 ──► STEP/DIR
+      │
+      ├──────────► Axis 3 ──► STEP/DIR
+      │
+      ├──────────► Axis 4 ──► STEP/DIR
+      │
+      └──────────► Axis 5 ──► STEP/DIR
 ```
 
-The transformation must not accidentally be applied both by the host and by the controller.
+The motion protocol should therefore represent the five axes independently.
 
+---
+
+## 20.3 Axis Independence
+
+[PROJECT-DECISION]
+
+No kinematic transformation such as CoreXY conversion is performed by the controller for the five primary axes.
+
+Each axis is treated as an independent motion channel.
+
+For example:
+
+```text
+Axis 1 → Motor / Driver 1
+Axis 2 → Motor / Driver 2
+Axis 3 → Motor / Driver 3
+Axis 4 → Motor / Driver 4
+Axis 5 → Motor / Driver 5
+```
+
+A command affecting one axis must not implicitly modify another axis unless such behavior is explicitly defined by the final motion-planning implementation.
+
+---
+
+## 20.4 Motion Planning
+
+[DESIGN-RECOMMENDATION]
+
+Although the five axes are electrically and logically independent, coordinated multi-axis motion may be required.
+
+The motion planner may therefore generate synchronized motion profiles for multiple axes.
+
+Conceptually:
+
+```text
+                    Motion Planner
+                         │
+          ┌──────────────┼──────────────┐
+          │              │              │
+          ▼              ▼              ▼
+       Axis 1         Axis 2         Axis 3
+          │              │              │
+          └───────┬──────┴──────┬───────┘
+                  │             │
+               Axis 4        Axis 5
+                  │             │
+                  └──────┬──────┘
+                         ▼
+                  Hardware Timers
+                         │
+                         ▼
+                     STEP / DIR
+```
+
+Synchronization between axes should be handled by the motion-control subsystem rather than by the Ethernet transport layer.
+
+---
+
+## 20.5 Hardware Timer Interface
+
+[PROJECT-DECISION / TBD]
+
+Each axis requires a deterministic STEP pulse-generation mechanism.
+
+The final firmware should map each axis to its assigned hardware timer/channel or other validated pulse-generation mechanism.
+
+```text
+Axis 1 ──► Timer / PWM Channel ──► STEP 1
+Axis 2 ──► Timer / PWM Channel ──► STEP 2
+Axis 3 ──► Timer / PWM Channel ──► STEP 3
+Axis 4 ──► Timer / PWM Channel ──► STEP 4
+Axis 5 ──► Timer / PWM Channel ──► STEP 5
+```
+
+[TBD]
+
+The exact timer/channel assignment must be taken from the project's authoritative pinout and firmware configuration.
+
+---
+
+## 20.6 Direction Control
+
+[PROJECT-DECISION / TBD]
+
+Each axis has an independent DIR signal.
+
+The direction state must be established according to the motion command before the corresponding STEP pulses are generated.
+
+```text
+Axis 1 ──► DIR 1 + STEP 1
+Axis 2 ──► DIR 2 + STEP 2
+Axis 3 ──► DIR 3 + STEP 3
+Axis 4 ──► DIR 4 + STEP 4
+Axis 5 ──► DIR 5 + STEP 5
+```
+
+The exact DIR timing requirements must be implemented according to the selected stepper/servo driver specifications.
+
+---
+
+## 20.7 Real-Time Requirement
+
+[PROJECT-DECISION]
+
+The Ethernet subsystem must not directly determine the timing of STEP pulses.
+
+Network packets should provide motion information to the motion subsystem, while hardware timers and the motion-control architecture are responsible for deterministic pulse generation.
+
+```text
+Ethernet / UDP
+      │
+      ▼
+Motion Command
+      │
+      ▼
+Motion Buffer / Planner
+      │
+      ▼
+Axis Control
+      │
+      ▼
+Hardware Timers
+      │
+      ▼
+Deterministic STEP/DIR
+```
+
+This separation is required to prevent network latency, packet jitter, or temporary communication delays from directly affecting STEP pulse timing.
+
+---
+
+## 20.8 Important Rule
+
+[PROJECT-DECISION]
+
+The CNC5AX-ETH controller must be treated as a **five-axis independent motion controller**.
+
+The firmware must **not introduce CoreXY, Cartesian-to-motor transformation, or any other multi-axis kinematic transformation unless explicitly required by a future project specification**.
+
+Any required coordinated motion should be implemented by the motion-planning layer while preserving the independent hardware control of all five axes.
 ---
 
 # 21. Feedback Communication
