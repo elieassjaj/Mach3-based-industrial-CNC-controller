@@ -42,12 +42,14 @@ These pins are designated for high-speed pulse generation (up to 2 MHz) and must
 * **LED_ERROR_PIN:** `PB1` (`GPIO_PIN_1`)
 
 ---
+## Digital Inputs (External Interrupts)
 
-## Digital Inputs (Active-Low)
+15 active-low digital inputs are connected to `PE0–PE14`. **All inputs must be configured as EXTI (External Interrupt) inputs** and handled through hardware interrupts rather than continuous polling.
 
-15 active-low digital inputs are utilized for microswitches, limit switches, e-stop, and probes. They are mapped consecutively on GPIOE:
-
-* **Inputs 0 to 14:** `PE0` through `PE14` (`GPIO_PIN_0` to `GPIO_PIN_14`).
+* **Inputs:** `PE0–PE14`
+* **E-STOP:** `PE2`
+* **E-STOP** must have the highest appropriate interrupt priority and immediately trigger the emergency-stop handling.
+* The interrupt trigger edge (`Rising`, `Falling`, or `Both`) must be selected according to the final hardware design.
 
 ---
 
