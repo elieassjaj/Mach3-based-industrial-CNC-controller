@@ -87,8 +87,8 @@ As the project grows, structural changes should be reflected here.
 |---|---|
 | [`Docs/SYSTEM_ARCHITECTURE.md`](Docs/SYSTEM_ARCHITECTURE.md) | High-level data-flow diagram: Mach3 → Ethernet → STM32F407 → STEP/DIR/I/O |
 | [`Docs/PINOUT.md`](Docs/PINOUT.md) | Authoritative MCU pin assignments (STEP, DIR, EN, inputs, relay, spindle, LEDs) |
-| [`Docs/FIRMWARE_ARCHITECTURE.md`](<Docs/FIRMWARE_ARCHITECTURE.md — CNC5AX-ETH Firmware Architecture.md>) | Full firmware architecture: subsystem breakdown, real-time priority model, HAL/LL policy, recommended source tree, AI-assisted development rules |
-| [`Docs/MOTION_ENGINE.md`](<Docs/MOTION_ENGINE.md — Motion Engine Requirements and Design Constraints.md>) | Motion-engine requirements: STEP/DIR timing, 5-axis synchronization, buffering, safety, acceptance criteria |
+| [`Docs/FIRMWARE_ARCHITECTURE.md`](<Docs/FIRMWARE_ARCHITECTURE.md>) | Full firmware architecture: subsystem breakdown, real-time priority model, HAL/LL policy, recommended source tree, AI-assisted development rules |
+| [`Docs/MOTION_ENGINE.md`](<Docs/MOTION_ENGINE.md>) | Motion-engine requirements: STEP/DIR timing, 5-axis synchronization, buffering, safety, acceptance criteria |
 | [`Docs/ethernet.md`](Docs/ethernet.md) | LAN8720A/RMII hardware, LwIP RAW API, UDP communication model, real-time networking constraints |
 | [`MACH3/SDK_README.MD`](MACH3/SDK_README.MD) | Rules for using the Mach3 SDK as the source of truth for host-side integration |
 | [`STM32_DOCs/Datasheet/STM32F407VG_Datasheet.md`](STM32_DOCs/Datasheet/STM32F407VG_Datasheet.md) | Guide to the STM32F407VG datasheet (device pins, electrical characteristics) |
