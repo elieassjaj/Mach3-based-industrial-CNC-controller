@@ -292,7 +292,7 @@ Not every input necessarily requires identical software treatment.
 
 # 8. Safety Input Priority
 
-E-Stop is handled via EXTI on PE2 (not polling)
+E-Stop is handled via EXTI on PE2 (not polling).
 End-stop and emergency-related inputs have priority over normal firmware functions.
 
 The implementation must ensure that a safety-related input can be serviced with sufficiently low latency even when:
