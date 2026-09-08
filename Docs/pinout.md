@@ -90,7 +90,7 @@ The following Ethernet signals use fixed hardware routing between the STM32F407V
 * The Ethernet PHY is **LAN8720A**.
 * The STM32F407VGT6 provides the Ethernet MAC.
 * Communication between the MCU and PHY uses **RMII**.
-* The Ethernet pins listed above are **fixed hardware connections** and must not be reassigned in firmware unless the hardware design is changed.
+* The Ethernet pins listed above are **fixed hardware connections** and must not be reassigned in firmware unless the hardware design is changed. PA1 = ETH_RMII_REF_CLK (INPUT, sourced from onboard 50MHz oscillator on the PHY board, not MCU MCO). 
 * `REF_CLK` is the RMII reference clock and is distinct from the MCU's `8 MHz HSE` clock.
 * The exact RMII reference-clock source/configuration is defined by the Ethernet hardware design and must be kept consistent with the LAN8720A configuration.
 
