@@ -566,7 +566,7 @@ The exact Mach3/software interaction and safety semantics must be derived from t
 
 Potential events include:
 
-- Emergency stop
+- Emergency stop `PE2`
 - Limit switch
 - Feed hold
 - Normal stop
