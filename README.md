@@ -1,4 +1,4 @@
-# CNC5AX-ETH
+# CNC5AiX-ETH
 
 ## 5-Axis Ethernet Mach3 Industrial Motion Controller
 
