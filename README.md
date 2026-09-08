@@ -75,7 +75,7 @@ Mach3-based-industrial-CNC-controller/
 
 The repository currently contains **specification and reference documentation** (firmware architecture, motion engine, pinout, system architecture, Ethernet stack), plus the **Mach3 SDK**, **STM32F407 reference material**, and **LAN8720A hardware references**. Firmware source code has not been added yet — the documents above define what it must satisfy.
 
-> **Note on file names:** two files under `Docs/` currently carry combined names (for example `FIRMWARE_ARCHITECTURE.md — CNC5AX-ETH Firmware Architecture.md`). The table below links to them using their exact current names; rename them to plain `.md` names if that was not intentional.
+
 
 As the project grows, structural changes should be reflected here.
 
