@@ -1036,19 +1036,19 @@ When the final architecture is selected, document the major decisions here or in
 At minimum document:
 
 ```text
-Timer allocation:
-DMA allocation:
-STEP generation mode:
-DIR generation method:
-Motion buffer architecture:
-Interpolation method:
-Position representation:
-Interrupt priorities:
-Maximum measured STEP rate:
-Maximum measured simultaneous axis rate:
-Measured jitter:
-Measured CPU load:
-Ethernet stress result:
+Timer allocation: One base timer drives the shared DMA trigger for STEP generation (specific timer TBD — candidate: TIM6 or TIM7).
+DMA allocation: Two DMA streams — one targeting GPIOA->BSRR (Y, Z, A, B), one targeting GPIOC->BSRR (X). Specific stream/channel numbers TBD, pending conflict check against Ethernet DMA.
+STEP generation mode: DMA-driven GPIO BSRR writes (not PWM/Output Compare) — see ADR-001 in Docs/FIRMWARE-ARCHITECTURE.md §41.
+DIR generation method: TBD.
+Motion buffer architecture: TBD.
+Interpolation method: TBD.
+Position representation: TBD.
+Interrupt priorities: TBD.
+Maximum measured STEP rate: TBD — not yet tested on hardware.
+Maximum measured simultaneous axis rate: TBD — not yet tested on hardware.
+Measured jitter: TBD.
+Measured CPU load: TBD.
+Ethernet stress result: TBD.
 ```
 
 This information should be updated after implementation and validation.
