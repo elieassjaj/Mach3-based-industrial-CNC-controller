@@ -355,7 +355,7 @@ This is a minimum guaranteed capability, not an indication that the other two ax
 The complete motion requirements are documented in:
 
 ```text
-Docs/MOTION_ENGINE.md
+Docs/MOTION-ENGINE.md
 ```
 
 ---
@@ -1359,11 +1359,11 @@ Before modifying firmware, inspect:
 
 ```text
 README.md
-Docs/SYSTEM_ARCHITECTURE.md
+Docs/SYSTEM-ARCHITECTURE.md
 Docs/PINOUT.md
 Docs/ethernet.md
-Docs/MOTION_ENGINE.md
-MACH3/SDK_README.MD
+Docs/MOTION-ENGINE.md
+MACH3/SDK-README.MD
 ```
 
 and the relevant STM32 documentation.
@@ -1568,17 +1568,17 @@ The firmware architecture must be consistent with the following project document
 ```text
 Docs/
 ├── PINOUT.md
-├── SYSTEM_ARCHITECTURE.md
-├── ethernet.md
-├── MOTION_ENGINE.md
-└── FIRMWARE_ARCHITECTURE.md
+├── SYSTEM-ARCHITECTURE.md
+├── ETHERNET.md
+├── MOTION-ENGINE.md
+└── FIRMWARE-ARCHITECTURE.md
 ```
 
 and:
 
 ```text
 MACH3/
-└── SDK_README.MD
+└── SDK-README.MD
 ```
 
 The STM32 hardware references are located in:
