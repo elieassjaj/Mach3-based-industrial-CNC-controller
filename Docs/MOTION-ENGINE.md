@@ -213,23 +213,21 @@ The final implementation must preserve this principle.
 
 # 9. STEP Pin Hardware Configuration
 
-All STEP pins are connected to timer alternate-function outputs on the PCB.
-
-According to the project hardware definition:
+According to the project hardware definition (`Docs/PINOUT.md`):
 
 ```text
-STEP_X = PD0
-STEP_Y = PD1
-STEP_Z = PD2
-STEP_A = PD3
-STEP_B = PD4
+STEP_X = PC9
+STEP_Y = PA8
+STEP_Z = PA9
+STEP_A = PA10
+STEP_B = PA11
 ```
 
-The current hardware documentation also specifies that these pins are intended for high-speed pulse generation using hardware timers and DMA.
+These pins have valid timer alternate-function mappings (PA8–PA11 = TIM1_CH1–CH4; PC9 = TIM3_CH4/TIM8_CH4), but per Section 10, they are deliberately configured as plain GPIO outputs and driven via DMA→BSRR rather than via their Alternate Function — because PA8–PA11 share a single TIM1 ARR (period), which would force axes Y, Z, A, and B onto one common STEP frequency.
 
-The exact timer/channel mapping must be taken from the authoritative project pinout and verified against the STM32F407 Datasheet and Reference Manual.
+The exact DMA stream/mask allocation must be taken from the authoritative project pinout and verified against the STM32F407 Datasheet and Reference Manual.
 
-Do not infer timer assignments from the GPIO names alone.
+Do not infer timer/DMA assignments from the GPIO names alone.
 
 ---
 
