@@ -1361,7 +1361,7 @@ Validation result
 **Risks:** Requires two DMA streams/masks (one per port) instead of one; must be checked against Ethernet DMA stream usage for conflicts — **TBD**.
 
 **Validation result:** TBD — pending real-hardware testing (≥3 axes simultaneously at 2 MHz, per Section 39).
-This prevents future AI-assisted development from unintentionally reversing important architectural decisions.
+
 
 ---
 
