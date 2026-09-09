@@ -152,7 +152,7 @@ STM32F407
 | Host Communication | Ethernet / UDP, LwIP RAW API |
 | Motion Axes | 5 (X, Y, Z, A, B) |
 | Target STEP Rate | Up to 2 MHz (≥ 3 axes guaranteed simultaneously) |
-| STEP/DIR Interface | Direct GPIO (GPIOD), active-high STEP |
+| STEP/DIR Interface | STEP: GPIOA/GPIOC (DMA→BSRR), DIR: GPIOD — both active-high |
 | Digital Inputs | 15, active-low, pull-up biased (GPIOE) |
 | Relay Output | 1 |
 | Spindle Output | 1 × PWM, 10 kHz |
@@ -168,7 +168,7 @@ Full authoritative detail is in [`Docs/PINOUT.md`](Docs/PINOUT.md); the current 
 
 | Signal | Pin(s) | Notes |
 |---|---|---|
-| STEP X / Y / Z / A / B | PD0, PD1, PD2, PD3, PD4 | GPIOD, DMA/timer-driven, `STEP_PINS_MASK = 0x001F` |
+| STEP X / Y / Z / A / B | PC9, PA8, PA9, PA10, PA11 | GPIOC/GPIOA, DMA→BSRR-driven (not AF/PWM); masks `STEP_PINS_MASK_GPIOA=0x0F00`, `STEP_PINS_MASK_GPIOC=0x0200` |
 | DIR X / Y / Z / A / B | PD8, PD9, PD10, PD11, PD12 | GPIOD |
 | EN | PD15 | GPIOD |
 | Spindle PWM | PB4 | e.g. TIM3_CH1, 10 kHz |
