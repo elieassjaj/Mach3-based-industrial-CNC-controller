@@ -4,18 +4,19 @@ This document outlines the complete hardware pinout for the Mach3-Based 5-Axis I
 
 ---
 
-## STEP Pins (GPIOD 0..4 via DMA/Timer)
+## STEP Pins (GPIOA 8..11 + GPIOC 9, via DMA → GPIO BSRR)
 
-These pins are designated for high-speed pulse generation (up to 2 MHz) and must be controlled using DMA and hardware timers.
+These pins are designated for high-speed pulse generation (up to 2 MHz) and are controlled exclusively via DMA writes to each port's BSRR register, triggered by a shared base timer's Update event. They are configured as standard GPIO Output (Push-Pull) — **not** Alternate Function. Even though PA8/PA9/PA10/PA11 have valid TIM1_CH1–CH4 alternate functions, PWM/Output-Compare generation is intentionally not used here, because all four TIM1 channels share a single ARR (period register), which would force axes Y, Z, A, and B onto one common step frequency. DMA-to-BSRR keeps every axis's frequency fully independent.
 
-* **STEP_X_PIN:** `PD0` (`GPIO_PIN_0`)
-* **STEP_Y_PIN:** `PD1` (`GPIO_PIN_1`)
-* **STEP_Z_PIN:** `PD2` (`GPIO_PIN_2`)
-* **STEP_A_PIN:** `PD3` (`GPIO_PIN_3`)
-* **STEP_B_PIN:** `PD4` (`GPIO_PIN_4`)
-* **STEP_PINS_MASK:** `(0x001F)` — Bits 0 to 4 for DMA BSRR transfers.
-* **Note:** All STEP pins (`PD0–PD4`) are connected to one of the PWM generation outputs of the timers.
-
+- **STEP_X_PIN:** `PC9` (`GPIO_PIN_9`), port `GPIOC`
+- **STEP_Y_PIN:** `PA8` (`GPIO_PIN_8`), port `GPIOA`
+- **STEP_Z_PIN:** `PA9` (`GPIO_PIN_9`), port `GPIOA`
+- **STEP_A_PIN:** `PA10` (`GPIO_PIN_10`), port `GPIOA`
+- **STEP_B_PIN:** `PA11` (`GPIO_PIN_11`), port `GPIOA`
+- *Note:* STEP pins now span **two GPIO ports**, so two separate DMA transfers/masks are required:
+  - `STEP_PINS_MASK_GPIOA` = `(0x0F00)` (Bits 8–11 → Y, Z, A, B → `GPIOA->BSRR`)
+  - `STEP_PINS_MASK_GPIOC` = `(0x0200)` (Bit 9 → X → `GPIOC->BSRR`)
+- *Note:* PWM/Output-Compare (Alternate Function) generation is **not** used for these pins, regardless of what their native alternate functions support.
 ---
 
 ## DIRECTION Pins (GPIOD 8..12)
