@@ -1342,7 +1342,25 @@ CPU impact
 Risks
 Validation result
 ```
+### ADR-001 — STEP Pulse Generation Method
 
+**Decision:** STEP pulses for all five axes (PC9, PA8, PA9, PA10, PA11) are generated via a shared base timer whose Update event triggers DMA transfers directly into each GPIO port's BSRR register (`GPIOA->BSRR` for Y/Z/A/B, `GPIOC->BSRR` for X). The pins are configured as standard GPIO Output (Push-Pull), **not** Alternate Function — native PWM/Output-Compare generation is intentionally not used.
+
+**Reason:** PA8–PA11 correspond to TIM1_CH1–CH4, which share a single ARR (period) register. Native PWM/Output-Compare would therefore force axes Y, Z, A, and B onto one common STEP frequency, which conflicts with the project requirement that each axis run at an independently commanded step rate (e.g. during a coordinated multi-axis move). DMA-to-BSRR decouples each axis's effective frequency from any single timer's shared period.
+
+**Alternatives considered:**
+- *Native PWM/Output-Compare per channel* — rejected: shared-ARR constraint above.
+- *Output-Compare toggle mode with independent per-channel CCR updates via DMA* — technically possible, but requires a separate DMA request/stream and state machine per channel, increasing complexity and DMA budget with no timing benefit over the BSRR method.
+
+**Timing impact:** Each axis's STEP frequency becomes fully independent of the others. Jitter is bounded by base-timer resolution and DMA transfer latency — exact figures **TBD**, pending hardware measurement (Section 39).
+
+**Memory impact:** One DMA buffer per port (GPIOA, GPIOC), sized to the interpolation tick depth — exact size **TBD**.
+
+**CPU impact:** Near-zero during steady-state pulse generation; CPU only refills buffers at a lower, batched rate.
+
+**Risks:** Requires two DMA streams/masks (one per port) instead of one; must be checked against Ethernet DMA stream usage for conflicts — **TBD**.
+
+**Validation result:** TBD — pending real-hardware testing (≥3 axes simultaneously at 2 MHz, per Section 39).
 This prevents future AI-assisted development from unintentionally reversing important architectural decisions.
 
 ---
