@@ -81,7 +81,7 @@ The **authoritative MCU pin mapping is `Docs/PINOUT.md`**. The README intentiona
                 │                       │
                 └──────────────┬────────┘
                                ▼
-                         Timer / DMA
+                 DMA →  GPIOx->BSRR   ← Base Timer Update Event
                                │
                          STEP / DIR
                                │
