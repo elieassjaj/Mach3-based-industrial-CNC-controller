@@ -362,24 +362,14 @@ Docs/MOTION-ENGINE.md
 
 # 10. STEP Generation Architecture
 
-The hardware PCB places the STEP outputs on timer Alternate Function capable pins.
+The STEP generator uses DMA-driven GPIO BSRR updates.
 
-The initial implementation direction is:
+STEP pins are configured as standard GPIO outputs, not Timer Alternate
+Function outputs. DMA transfers write precomputed BSRR values directly
+to the corresponding GPIO port.
 
-```text
-Timer + DMA
-```
-
-However, the final implementation must determine whether the most suitable method is:
-
-- PWM
-- Output Compare
-- Toggle mode
-- One-pulse generation
-- Timer + DMA
-- DMA-driven GPIO updates
-- Another hardware-assisted mechanism
-- A combination of these approaches
+A base timer may be used as the DMA request/transfer trigger. The timer
+does not generate the STEP waveform itself.
 
 The implementation must select the architecture that provides the best balance of:
 
@@ -1156,11 +1146,13 @@ Protocol Decode
 Motion Command Interface
   ↓
 Motion Engine
-  ↓
-Trajectory / Interpolation
-  ↓
-Timer / DMA
-  ↓
+     ↓
+STEP Event / BSRR Buffer
+     ↓
+DMA
+     ↓
+GPIOx->BSRR
+     ↓
 STEP / DIR
 ```
 
