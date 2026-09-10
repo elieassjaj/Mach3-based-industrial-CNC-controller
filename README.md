@@ -307,7 +307,7 @@ This repository is intended to be developed with AI assistance. The following ru
 1. Read the relevant project documentation before modifying firmware.
 2. Treat `Docs/PINOUT.md` as the authoritative MCU pin mapping.
 3. Treat the Mach3 SDK as the authority for Mach3-specific behavior.
-4. Verify timer, DMA, GPIO, alternate-function and interrupt decisions against the STM32 documentation and the actual CubeMX configuration.
+4.Verify the DMA, GPIO/BSRR, DMA-request source, timer configuration , and interrupt decisions... .
 5. Do not invent unspecified project values or APIs.
 6. Keep safety and real-time motion independent of Ethernet/background processing.
 7. Prefer deterministic hardware peripherals for timing-critical tasks.
