@@ -231,7 +231,9 @@ Fixed project-level requirements include:
 - STEP pulse width should maintain a practical margin above **100 ns** and must satisfy the connected driver's requirements.
 - The 2 MHz requirement is not considered verified until it is measured on the final hardware.
 
-The final timer/DMA allocation is an implementation decision and must be checked against all MCU peripheral, GPIO, DMA and Ethernet resource conflicts before being treated as final.
+The STEP generation architecture is fixed as DMA-driven GPIO BSRR updates.
+The remaining implementation details include DMA stream allocation, BSRR buffering,
+and the base timer used as the DMA request source.
 
 ---
 
