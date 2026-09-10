@@ -101,11 +101,11 @@ The following Ethernet signals use fixed hardware routing between the STM32F407V
 
 | Function | STM32F407VGT6 |
 |---|---|
-| STEP X | `PD0` |
-| STEP Y | `PD1` |
-| STEP Z | `PD2` |
-| STEP A | `PD3` |
-| STEP B | `PD4` |
+| STEP X | `PC9` |
+| STEP Y | `PA8` |
+| STEP Z | `PA9` |
+| STEP A | `PA10` |
+| STEP B | `PA11` |
 | DIR X | `PD8` |
 | DIR Y | `PD9` |
 | DIR Z | `PD10` |
