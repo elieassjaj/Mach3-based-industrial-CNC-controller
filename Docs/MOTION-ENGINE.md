@@ -989,21 +989,7 @@ The final implementation must retain sufficient margin for:
 
 ---
 
-### Rule 6 — Do not force PWM without analysis
-
-The hardware provides timer alternate-function outputs for the STEP pins.
-
-This does **not** automatically mean PWM is the optimal STEP-generation technique.
-
-The AI must compare appropriate approaches and select the one that provides the best combination of:
-
-- Determinism
-- Synchronization
-- DMA efficiency
-- CPU efficiency
-- DIR timing
-- Multi-axis scalability
-- Reliability
+### Rule 6 —  This item has been removed.
 
 ---
 
@@ -1079,8 +1065,7 @@ The final implementation should follow this principle:
              │                 │
              └────────┬────────┘
                       ▼
-              Hardware Timing
-              Timer / DMA
+           DMA →  GPIOx->BSRR   ← Base Timer Update Event
                       │
                       ▼
                   STEP / DIR
