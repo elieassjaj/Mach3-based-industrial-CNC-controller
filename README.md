@@ -126,14 +126,14 @@ Mach3-based-industrial-CNC-controller/
 ├── MACH3/
 │   ├── Current Includes Files from Mach3 Software Develope Kit.zip
 │   ├── Mach3 Software Development Kit(SDK).zip
-│   └── SDK_README.MD
+│   └── SDK-README.MD
 │
 ├── STM32_DOCs/
 │   ├── Cortex-M4_Programming_Manual/
 │   ├── Datasheet/
 │   ├── Errata/
 │   ├── Reference_Manual/
-│   ├── application note/
+│   ├── application_note/
 │   └── stm32_github_reference/
 │
 └── README.md
@@ -152,7 +152,7 @@ Mach3-based-industrial-CNC-controller/
 | [`Docs/FIRMWARE-ARCHITECTURE.md`](Docs/FIRMWARE-ARCHITECTURE.md) | Firmware subsystem boundaries, priorities, real-time rules, safety and AI-development constraints |
 | [`Docs/MOTION-ENGINE.md`](Docs/MOTION-ENGINE.md) | STEP/DIR timing requirements, multi-axis behavior, buffering and acceptance criteria |
 | [`Docs/ETHERNET.md`](Docs/ETHERNET.md) | LAN8720A/RMII, Ethernet MAC/DMA, LwIP and UDP architecture |
-| [`MACH3/SDK_README.MD`](MACH3/SDK_README.MD) | Rules and guidance for Mach3 SDK integration |
+| [`MACH3/SDK-README.MD`](MACH3/SDK-README.MD) | Rules and guidance for Mach3 SDK integration |
 
 ### Recommended Reading Order
 
@@ -162,7 +162,7 @@ Mach3-based-industrial-CNC-controller/
 4. `Docs/FIRMWARE-ARCHITECTURE.md`
 5. `Docs/MOTION-ENGINE.md`
 6. `Docs/ETHERNET.md`
-7. `MACH3/SDK_README.MD`
+7. `MACH3/SDK-README.MD`
 8. `STM32_DOCs/` whenever a decision depends on exact STM32 behavior
 
 ---

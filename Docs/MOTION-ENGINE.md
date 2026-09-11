@@ -1008,9 +1008,9 @@ The motion engine implementation must be based on the following sources.
 
 ```text
 Docs/PINOUT.md
-Docs/SYSTEM_ARCHITECTURE.md
-Docs/ethernet.md
-MACH3/SDK_README.MD
+Docs/SYSTEM-ARCHITECTURE.md
+Docs/ETHERNET.md
+MACH3/SDK-README.MD
 ```
 
 ## STM32 Documentation
@@ -1146,11 +1146,7 @@ The final implementation must retain sufficient margin for:
 
 ---
 
-### Rule 6 —  This item has been removed.
-
----
-
-### Rule 7 — Prefer hardware timing
+### Rule 6 — Prefer hardware timing
 
 When a timing requirement belongs to the STEP/DIR waveform itself, prefer deterministic hardware peripherals over software delays or high-frequency polling.
 
@@ -1158,7 +1154,7 @@ CPU-based timing must not be selected simply because it is easier to implement.
 
 ---
 
-### Rule 8 — Measure before claiming compliance
+### Rule 7 — Measure before claiming compliance
 
 A theoretical calculation is not sufficient to claim:
 

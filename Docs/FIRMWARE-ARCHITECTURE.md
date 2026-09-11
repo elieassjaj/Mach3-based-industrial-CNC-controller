@@ -456,7 +456,7 @@ This includes:
 The existing SDK guidance in:
 
 ```text
-MACH3/SDK_README.MD
+MACH3/SDK-README.MD
 ```
 
 must be followed.
@@ -672,7 +672,7 @@ Protocol Layer
 The detailed Ethernet architecture is documented in:
 
 ```text
-Docs/ethernet.md
+Docs/ETHERNET.md
 ```
 
 The firmware architecture must follow that document rather than defining a second independent Ethernet design.
@@ -1376,7 +1376,7 @@ Before modifying firmware, inspect:
 README.md
 Docs/SYSTEM-ARCHITECTURE.md
 Docs/PINOUT.md
-Docs/ethernet.md
+Docs/ETHERNET.md
 Docs/MOTION-ENGINE.md
 MACH3/SDK-README.MD
 ```
@@ -1671,7 +1671,7 @@ This document defines the **firmware architecture constraints and design princip
 It does not replace:
 
 ```text
-Docs/MOTION_ENGINE.md
+Docs/MOTION-ENGINE.md
 ```
 
 for motion-specific requirements,
@@ -1683,7 +1683,7 @@ Docs/PINOUT.md
 for hardware pin assignments,
 
 ```text
-Docs/ethernet.md
+Docs/ETHERNET.md
 ```
 
 for Ethernet architecture,
@@ -1691,7 +1691,7 @@ for Ethernet architecture,
 or:
 
 ```text
-MACH3/SDK_README.MD
+MACH3/SDK-README.MD
 ```
 
 for Mach3 SDK behavior.
