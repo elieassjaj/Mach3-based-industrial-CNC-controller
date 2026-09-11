@@ -231,82 +231,197 @@ Do not infer timer/DMA assignments from the GPIO names alone.
 
 ---
 
-# 10. Preferred Hardware Generation Strategy
+## 10. STEP Generation Architecture
 
-The initial design direction is:
+The STEP generation architecture is fixed as a **timer-triggered DMA to GPIO BSRR** design.
+
+STEP outputs are configured as normal GPIO outputs. Timer PWM, Output Compare, Toggle mode, One-Pulse mode, and CPU-driven GPIO toggling are **not used** for STEP waveform generation.
+
+The motion engine prepares time-ordered STEP events in DMA buffers. DMA transfers precomputed 32-bit values directly to the corresponding GPIO `BSRR` registers.
+
+### Generation Path
 
 ```text
-Hardware Timer + DMA
+Motion Engine
+      │
+      ▼
+STEP Event / BSRR Buffers
+      │
+      ▼
+     DMA
+      │
+      ▼
+GPIOx->BSRR
+      │
+      ▼
+STEP Outputs
 ```
 
-However, the project does **not** predefine whether the final implementation must use:
+A base timer provides the deterministic DMA request timing:
 
-- PWM mode
-- Output Compare
-- Toggle mode
-- One-pulse generation
-- DMA-driven GPIO/BSRR updates
-- Timer + DMA waveform generation
-- A combination of the above
-- Another hardware-assisted architecture
+```text
+Base Timer Update Event
+          │
+          ▼
+         DMA
+          │
+          ▼
+GPIOx->BSRR
+```
 
-The final method must be selected by the implementing AI/engineer based on measured and documented requirements.
+The timer therefore acts as the **DMA timing/request source**. It does not directly generate the STEP waveform and its output channels are not used as STEP outputs.
 
-### Selection Criteria
+### BSRR-Based STEP Events
 
-The chosen implementation must prioritize:
+Each DMA transfer represents a predefined GPIO state transition. The transferred BSRR value may contain:
 
-1. Deterministic STEP timing
-2. Deterministic DIR timing
-3. Low CPU overhead
-4. Low interrupt frequency in the hard real-time path
-5. Sufficient DMA bandwidth
-6. Sufficient timer resolution
-7. Multi-axis synchronization
-8. Minimal timing jitter
-9. Safe handling of direction changes
-10. Reliable operation under maximum Ethernet traffic
-11. Sufficient margin above the minimum requirements
-12. Maintainability and debuggability
+- GPIO set bits for STEP outputs that must become HIGH
+- GPIO reset bits for STEP outputs that must become LOW
+- Multiple axis transitions in the same transfer when required
 
-Do not select PWM merely because the pins are connected to timer PWM-capable outputs.
+This allows several axes sharing the same timing base to change state deterministically from a single scheduled event.
 
-PWM is one possible implementation technique, not a mandatory architectural requirement.
+The STEP GPIO assignments are defined by `Docs/PINOUT.md`.
+
+Current STEP output grouping is:
+
+```text
+GPIOA:
+    PA8  = Y_STEP
+    PA9  = Z_STEP
+    PA10 = A_STEP
+    PA11 = B_STEP
+
+GPIOC:
+    PC9  = X_STEP
+```
+
+Because the STEP signals are distributed across two GPIO ports, the implementation must account for both `GPIOA->BSRR` and `GPIOC->BSRR` transfers.
+
+### Timing Requirements
+
+The STEP generator must support:
+
+- Maximum target STEP frequency: **2 MHz**
+- Minimum guaranteed capability: **3 axes simultaneously at 2 MHz**
+- STEP active state: HIGH
+- Minimum practical STEP pulse width: greater than **100 ns**
+- DIR setup time requirement: **200 ns minimum**
+- DIR hold time requirement: **200 ns minimum**
+
+At 2 MHz, the nominal STEP period is:
+
+```text
+T_STEP = 1 / 2 MHz = 500 ns
+```
+
+The implementation must preserve sufficient timing margin and must not depend on CPU execution latency for STEP edge generation.
+
+### Determinism
+
+Once a STEP event buffer has been committed for DMA execution, STEP timing must be independent of:
+
+- Ethernet packet arrival timing
+- LwIP processing
+- UDP callbacks
+- CPU scheduling jitter
+- Background diagnostics
+- Non-real-time application code
+
+The CPU is responsible for preparing and managing motion data, while the timer-triggered DMA path is responsible for deterministic GPIO state updates.
 
 ---
 
-# 11. Timer and DMA Architecture Must Be Derived
+## 11. Timer and DMA Resource Allocation
 
-The final timer and DMA allocation must be determined during implementation.
-
-The implementation must inspect:
+The STEP-generation architecture is fixed:
 
 ```text
-STM32F407 Datasheet
-STM32F407 Reference Manual
-STM32F405/407 Errata
-STM32F4 HAL/LL documentation and source
-STM32CubeF4 package
-Docs/PINOUT.md
+Base Timer → DMA Request → GPIOx->BSRR
 ```
 
-The implementation must determine:
+The exact STM32 peripheral allocation remains an implementation detail and must be selected according to the STM32F407VGT6 DMA request mapping, available DMA streams/channels, GPIO port usage, and conflicts with Ethernet and other peripherals.
 
-- Which timers can drive each STEP pin
-- Which timer channels correspond to those pins
-- Which timers can operate independently
-- Which DMA streams/channels can service the required requests
-- DMA conflicts
-- Timer synchronization options
-- Timer clock frequencies
-- Counter resolution
-- Maximum practical STEP frequency
-- DMA transfer rate
-- Interrupt load
-- Memory requirements
-- Inter-axis synchronization capability
+### Fixed Architectural Requirements
 
-No timer or DMA assignment should be hard-coded in project documentation before this analysis has been completed.
+The implementation must satisfy the following:
+
+```text
+STEP GPIO mode:
+    GPIO Output Push-Pull
+
+STEP waveform generation:
+    DMA writes to GPIOx->BSRR
+
+DMA timing source:
+    Timer update event
+
+STEP generation:
+    Hardware-assisted
+
+CPU-generated STEP edges:
+    Not allowed
+
+Timer PWM / Output Compare on STEP pins:
+    Not used
+```
+
+### DMA Requirements
+
+The DMA implementation must support deterministic writes to the GPIO BSRR registers.
+
+Because the STEP outputs are distributed across two GPIO ports, the design must provide a suitable DMA transfer path for:
+
+```text
+GPIOA->BSRR
+GPIOC->BSRR
+```
+
+The implementation may use separate DMA streams for the two GPIO ports, provided that both transfers remain synchronized to the intended motion timeline.
+
+The exact DMA stream/channel selection is **TBD** and must be verified against the STM32F407 DMA mapping and all other active peripherals.
+
+### Timer Requirements
+
+The timer used for STEP DMA triggering must provide a deterministic update-event rate appropriate for the selected motion-event representation.
+
+The timer is a **timing source for DMA requests only**.
+
+The following must not be assumed:
+
+- A timer channel must directly correspond to a STEP GPIO.
+- A STEP GPIO must use a timer Alternate Function.
+- PWM duty cycle is responsible for STEP pulse width.
+- Output Compare directly drives STEP outputs.
+
+Instead, the timer establishes the schedule from which DMA transfers update the GPIO BSRR registers.
+
+### Resource Allocation Constraints
+
+The final allocation must be checked for conflicts with:
+
+- Ethernet MAC/LwIP DMA requirements
+- Spindle PWM timer
+- Other timer functions
+- DMA streams and channels already required by the system
+- GPIO availability
+- Interrupt resources
+- Memory/buffer placement and DMA accessibility
+
+The final Timer/DMA selection is therefore an **implementation decision**, but the underlying architecture is not.
+
+### Validation Requirements
+
+The final implementation must be validated on real hardware for:
+
+1. 2 MHz STEP operation
+2. At least 3 axes simultaneously operating at 2 MHz
+3. Correct STEP pulse width
+4. Correct DIR setup and hold timing
+5. Stable operation while Ethernet traffic is active
+6. No missed or duplicated STEP events under maximum intended load
+
+The 2 MHz requirement must not be considered verified from simulation, source code inspection, or theoretical timer/DMA capability alone.
 
 ---
 
