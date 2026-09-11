@@ -146,7 +146,7 @@ The implementation must ensure that the generated pulse is:
 - Free from unintended glitches
 - Long enough to satisfy the external driver's requirements
 
-The exact pulse-generation method must be selected by the firmware implementation.
+
 
 ---
 
