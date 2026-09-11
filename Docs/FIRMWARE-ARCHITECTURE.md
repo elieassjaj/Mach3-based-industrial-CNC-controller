@@ -72,10 +72,13 @@ The firmware should follow the following logical structure:
         Motion Timing     Position      Safety
               │
               ▼
-        Timer / DMA / HW
-              │
-              ▼
-          STEP / DIR
+      STEP Event / BSRR Buffer
+      ↓
+     DMA
+      ↓
+GPIOx->BSRR
+      ↓
+     STEP
               │
        ┌──────┼──────┬──────┬──────┐
        ▼      ▼      ▼      ▼      ▼
@@ -147,9 +150,11 @@ Motion command / buffer
    ↓
 Motion Engine
    ↓
-Timer / DMA
+  DMA
    ↓
-STEP / DIR
+GPIOx->BSRR
+   ↓
+STEP       / DIR
 ```
 
 ---
