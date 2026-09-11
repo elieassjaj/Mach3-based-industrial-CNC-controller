@@ -536,9 +536,9 @@ must be consulted.
 
 # 14. RTOS vs Bare-Metal
 
-The firmware architecture must **not** assume FreeRTOS or Bare-Metal operation in advance.
+**Decision made — see ADR-003 (Section 41).** The firmware uses a **Bare-Metal, interrupt-driven superloop**. No RTOS (FreeRTOS) is used. This section retains the original evaluation criteria for reference; ADR-003 records the reasoning, alternatives considered, and the conditions under which this decision should be revisited.
 
-The final decision must be made after evaluating:
+The evaluation was made by weighing:
 
 - Real-time requirements
 - STEP generation architecture
@@ -572,7 +572,7 @@ The chosen architecture must not compromise:
 - DIR timing
 - Motion determinism
 
-The implementation decision should be documented after analysis.
+See ADR-003 (Section 41) for the final decision and its justification.
 
 ---
 
@@ -988,7 +988,7 @@ The firmware must remain fully debuggable through:
 SWD
 ```
 
-SWD access must remain available throughout development.
+SWD access must remain available throughout development. **Debug/program access is SWD-only — full JTAG is not used.** This is not only a tooling preference: `PB4` (`Docs/PINOUT.md`, Spindle PWM / `TIM3_CH1`) defaults to the `NJTRST` function on the STM32F407. Leaving the debug port in SWD-only mode (2-pin: `SWDIO`/`SWCLK` on `PA13`/`PA14`) is what allows `PB4` to be freely reconfigured as `TIM3_CH1` for Spindle PWM without contention from the JTAG function. If a future change ever required full JTAG, the Spindle PWM pin assignment on `PB4` would need to be revisited first.
 
 The implementation should support debugging of:
 
@@ -1359,6 +1359,82 @@ Validation result
 
 **Validation result:** TBD — pending real-hardware testing (≥3 axes simultaneously at 2 MHz, per Section 39).
 
+---
+
+### ADR-002 — STEP-Generation Base Timer & DMA Allocation
+
+**Decision:** `TIM2` is the shared base timer whose Update event triggers the STEP-generation DMA transfers established in ADR-001. `TIM2`'s Update-event DMA request (`TIM2_UP`) is expected to be serviced through **DMA1** (request mapping places `TIM2_UP` on `Stream 1`/`Channel 3`, with `Stream 7`/`Channel 3` available as the alternate mapping) — one stream feeding `GPIOA->BSRR` (Y/Z/A/B) and the other feeding `GPIOC->BSRR` (X), both triggered from the same `TIM2_UP` event.
+
+**Reason:**
+- `Docs/MOTION-ENGINE.md` Section 33 originally named `TIM2` or `TIM3` as candidates. `TIM3_CH1` (`PB4`) is already committed to Spindle PWM at a fixed 10 kHz period (`Docs/PINOUT.md`). Sharing `TIM3` between Spindle PWM and the STEP-DMA base rate would recreate the same shared-ARR conflict ADR-001 already rejected for `TIM1` — the spindle's fixed 10 kHz period and the STEP base tick rate would be forced to share one period register. `TIM2` has no other confirmed use in this project and avoids the conflict entirely.
+- `TIM2` is a 32-bit general-purpose timer, giving more prescaler/ARR range than the 16-bit alternatives for tuning the base tick rate.
+- The STM32F407 Ethernet MAC uses its own dedicated internal DMA engine, entirely separate from the DMA1/DMA2 general-purpose controllers. `TIM2`'s use of DMA1 therefore cannot contend with Ethernet RX/TX DMA traffic.
+- No other peripheral currently defined in `Docs/PINOUT.md` uses the remaining DMA1 clients (I2C1–3, SPI2–3, USART3, UART4/5), so `DMA1 Stream1`/`Stream7 Channel 3` are expected to be free.
+
+**Alternatives considered:**
+- *`TIM3`* — rejected: conflicts with Spindle PWM's fixed 10 kHz period (see Reason).
+- *`TIM4`/`TIM5`* — not selected: no advantage over `TIM2` for this role, and `TIM2`'s 32-bit counter is preferable; may be revisited only if `TIM2` becomes needed elsewhere.
+
+**Timing impact:** Unchanged from ADR-001 — base-tick jitter remains bounded by timer update-event timing and DMA arbitration latency; exact figures **TBD**, pending hardware measurement (Section 39).
+
+**Memory impact:** Unchanged from ADR-001 (one DMA buffer per GPIO port).
+
+**CPU impact:** None beyond ADR-001; `TIM2` configuration is a one-time initialization cost.
+
+**Risks / open items:**
+- The exact DMA1 stream/channel assignment (which of `Stream 1`/`Stream 7` feeds `GPIOA` vs `GPIOC`) must still be confirmed against RM0090's DMA1 request-mapping table before implementation. **The RM0090 PDF currently checked into this repository (`STM32_DOCs/Reference_Manual/`) is a 2-byte placeholder file, not the real document, and must be replaced with a valid copy before this mapping can be verified against the authoritative source**, per the project's source-of-truth rule (Section 13).
+- `TIM2`'s clock source, prescaler, and the resulting base-tick rate are motion-engine implementation decisions (`Docs/MOTION-ENGINE.md` Section 27) and remain **TBD**.
+
+**Validation result:** TBD — pending real-hardware testing.
+
+---
+
+### ADR-003 — Firmware Execution Model: Bare-Metal vs RTOS
+
+**Decision:** **Bare-metal, interrupt-driven superloop.** No RTOS (FreeRTOS) is used.
+
+**Reason:**
+- The hardest real-time constraint in this project — STEP/DIR pulse timing — is already fully offloaded to hardware by ADR-001/ADR-002 (`TIM2` Update event → DMA → `GPIOx->BSRR`). Once a STEP buffer is committed to DMA, its timing depends on neither a bare-metal loop nor an RTOS scheduler. This removes the traditional strongest argument for an RTOS in a motion controller — protecting hard-real-time timing from scheduling jitter — because that protection already comes from the hardware/DMA path.
+- Safety-critical input handling (E-STOP and the other `PE0`–`PE14` EXTI inputs) is serviced by NVIC hardware interrupts, which preempt a bare-metal main loop and RTOS tasks identically, provided ISR priority is configured above the kernel's own priority (e.g. above `PendSV`/`SysTick` in a FreeRTOS build). An RTOS does not improve E-STOP latency in this architecture.
+- The project's chosen LwIP programming model (`Docs/ETHERNET.md`, RAW API) is a callback-based, single-context API designed for exactly this kind of bare-metal superloop (or one dedicated RTOS task); it is not thread-safe and gains nothing from a preemptive scheduler. Running it under an RTOS would require additional locking/mailbox discipline (LwIP's `tcpip.c` model) with no offsetting benefit at this project's scope.
+- The remaining software responsibilities (Ethernet/LwIP polling, protocol parsing, motion-buffer refill, digital I/O bookkeeping, diagnostics) form a small, bounded, well-understood set of periodic/event-driven work — not an open-ended set of independently-scheduled services. This is exactly the case Rule 7 (Section 42, "prefer the simplest architecture that meets all requirements") describes as not warranting an RTOS.
+- Bare-metal avoids RTOS-associated RAM/flash overhead (kernel, per-task stacks, heap) and an added class of concurrency failure modes (priority inversion, mutex/queue misuse), keeping the system easier to reason about and debug via SWD (Section 29).
+
+**Alternatives considered:**
+- *FreeRTOS (fully RTOS-based)* — rejected for this project's scope: adds scheduler/RAM overhead and new concurrency-bug classes without improving the two things that actually need protection (STEP timing — already hardware-guaranteed; E-STOP latency — already NVIC-guaranteed).
+- *Hybrid (hardware/interrupt-driven hard-real-time + RTOS tasks for everything else)* — the fallback if the bare-metal superloop is later measured to introduce unacceptable worst-case latency into Ethernet processing or motion-buffer refill. Not adopted now because no such measurement exists yet, and Rule 7/Rule 8 (Section 42) direct against introducing RTOS complexity pre-emptively.
+
+**Resulting logical structure** (not a mandated source layout):
+
+```text
+main()
+ └─ System / Clock / GPIO / Timer / DMA / EXTI init
+ └─ Ethernet / LwIP init
+ └─ while (1):
+      Ethernet / LwIP processing   (RAW-API callbacks + required LwIP periodic calls)
+      Motion command / buffer processing
+      Digital I/O + Output Manager housekeeping
+      Diagnostics
+```
+
+Running above and independent of this loop, purely via NVIC hardware interrupt:
+
+```text
+EXTI (PE0–PE14, E-STOP on PE2)        → Safety / Input Manager   (highest priority)
+TIM2-triggered DMA (STEP/DIR)          → no CPU involvement in steady state
+DMA Transfer-Complete/Half-Complete    → Motion buffer refill      (next-highest priority)
+Ethernet MAC/DMA IRQ                   → hand-off into LwIP        (lower priority)
+```
+
+**Timing impact:** No change to the STEP/DIR timing guarantees already established by ADR-001/ADR-002 (hardware/DMA-timed). Safety-input latency remains bounded by NVIC interrupt latency, not by loop or scheduler timing.
+
+**Memory impact:** No RTOS kernel, task stacks, or heap required; only static/DMA buffers and normal call-stack usage.
+
+**CPU impact:** Superloop iterations must remain non-blocking (Section 34: no `HAL_Delay()` or blocking waits in the loop). Worst-case loop latency must still be measured (Section 39) to size the STEP-DMA and motion-command buffers with adequate margin — a requirement that exists regardless of the RTOS/bare-metal choice.
+
+**Risks:** If a future requirement introduces genuinely independent, long-running, or blocking background work (e.g. a firmware-update-over-Ethernet mechanism — currently **NOT IMPLEMENTED** per `Docs/ETHERNET.md` Section 29), that work must not be added to the same superloop without re-evaluating this decision; this is exactly the case the hybrid alternative above exists for.
+
+**Validation result:** TBD — pending measurement of worst-case superloop iteration time under maximum Ethernet + motion load (Section 39; `Docs/MOTION-ENGINE.md` Section 29).
 
 ---
 
