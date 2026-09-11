@@ -589,21 +589,23 @@ The preferred conceptual relationship is:
 
 ```text
 Ethernet
-   │
-   ▼
-UDP / Protocol
-   │
-   ▼
+     │
+     ▼
+ UDP / Protocol
+    │
+    ▼
 Motion Command Buffer
    │
    ▼
 Motion Engine
-   │
-   ▼
-Hardware Timer / DMA
-   │
-   ▼
-STEP / DIR
+      ↓
+STEP Event / BSRR Buffer
+      ↓
+     DMA
+      ↓
+GPIOx->BSRR
+      ↓
+    STEP
 ```
 
 The Ethernet callback must not become the STEP-generation mechanism.
@@ -804,26 +806,66 @@ The authoritative machine kinematic model must be documented before implementati
 
 # 27. Implementation Independence
 
-The following are intentionally **not fixed** by this document:
+The following implementation details are intentionally **not fixed** by this document and may be selected during firmware development, provided that all fixed project requirements and architectural constraints are preserved:
 
 ```text
-Timer mode
-PWM vs Output Compare
-DMA architecture
-DMA buffering
-Interrupt frequency
 Timer allocation
+DMA stream/channel allocation
+DMA buffering mechanism
+Interrupt frequency
+Exact interrupt priorities
+
 Motion interpolation algorithm
 Acceleration algorithm
 Deceleration algorithm
 Jerk handling
 Buffer depth
 Position representation
+
 Communication timeout
 Packet scheduling
+
 RTOS vs Bare-Metal
-Exact interrupt priorities
+DIR generation implementation
 ```
+
+The following items are **already fixed by the project architecture and must not be replaced by an alternative STEP-generation architecture**:
+
+```text
+STEP generation architecture:
+    Timer-triggered DMA → GPIOx->BSRR
+
+STEP output mode:
+    Standard GPIO output
+
+STEP waveform generation:
+    DMA-driven GPIO BSRR writes
+
+STEP generation:
+    Hardware-assisted
+
+CPU-driven STEP generation:
+    Not allowed
+
+Timer PWM / Output Compare on STEP pins:
+    Not used
+```
+
+The implementation may optimize or refine the unfixed items above, but it must not change the fixed STEP-generation architecture unless the project requirements and hardware architecture are explicitly revised.
+
+All implementation decisions must be verified against:
+
+```text
+Project requirements
+Docs/PINOUT.md
+STM32F407 Datasheet
+STM32F407 Reference Manual
+STM32 Errata
+Mach3 SDK
+Measured real-time performance
+```
+
+The selected implementation must preserve deterministic multi-axis motion, safety, and the required **3 axes at 2 MHz** minimum capability.```
 
 The AI implementing the final firmware must evaluate these choices against the fixed requirements.
 
