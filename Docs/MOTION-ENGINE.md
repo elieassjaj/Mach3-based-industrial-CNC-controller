@@ -809,7 +809,6 @@ The authoritative machine kinematic model must be documented before implementati
 The following implementation details are intentionally **not fixed** by this document and may be selected during firmware development, provided that all fixed project requirements and architectural constraints are preserved:
 
 ```text
-Timer allocation
 DMA stream/channel allocation
 DMA buffering mechanism
 Interrupt frequency
@@ -825,8 +824,17 @@ Position representation
 Communication timeout
 Packet scheduling
 
-RTOS vs Bare-Metal
 DIR generation implementation
+```
+
+The following items were left open by this document but have since been fixed by an Architecture Decision Record in `Docs/FIRMWARE-ARCHITECTURE.md` §41 and must not be silently re-opened without revising that ADR:
+
+```text
+STEP-DMA base timer:
+    TIM2 (ADR-002) — TIM3 is unavailable, it is committed to Spindle PWM
+
+Firmware execution model:
+    Bare-metal, interrupt-driven superloop; no RTOS (ADR-003)
 ```
 
 The following items are **already fixed by the project architecture and must not be replaced by an alternative STEP-generation architecture**:
@@ -1008,9 +1016,9 @@ The motion engine implementation must be based on the following sources.
 
 ```text
 Docs/PINOUT.md
-Docs/SYSTEM_ARCHITECTURE.md
-Docs/ethernet.md
-MACH3/SDK_README.MD
+Docs/SYSTEM-ARCHITECTURE.md
+Docs/ETHERNET.md
+MACH3/SDK-README.MD
 ```
 
 ## STM32 Documentation
@@ -1146,11 +1154,7 @@ The final implementation must retain sufficient margin for:
 
 ---
 
-### Rule 6 —  This item has been removed.
-
----
-
-### Rule 7 — Prefer hardware timing
+### Rule 6 — Prefer hardware timing
 
 When a timing requirement belongs to the STEP/DIR waveform itself, prefer deterministic hardware peripherals over software delays or high-frequency polling.
 
@@ -1158,7 +1162,7 @@ CPU-based timing must not be selected simply because it is easier to implement.
 
 ---
 
-### Rule 8 — Measure before claiming compliance
+### Rule 7 — Measure before claiming compliance
 
 A theoretical calculation is not sufficient to claim:
 
@@ -1179,9 +1183,10 @@ When the final architecture is selected, document the major decisions here or in
 At minimum document:
 
 ```text
-Timer allocation: One base timer drives the shared DMA trigger for STEP generation (specific timer TBD — candidate: TIM2 or TIM3).
-DMA allocation: Two DMA streams — one targeting GPIOA->BSRR (Y, Z, A, B), one targeting GPIOC->BSRR (X). Specific stream/channel numbers TBD, pending conflict check against Ethernet DMA.
+Timer allocation: TIM2 drives the shared Update-event DMA trigger for STEP generation. TIM3 was rejected as a candidate because TIM3_CH1 (PB4) is already committed to Spindle PWM at a fixed 10 kHz period — see ADR-002 in Docs/FIRMWARE-ARCHITECTURE.md §41.
+DMA allocation: Two DMA1 streams — one targeting GPIOA->BSRR (Y, Z, A, B), one targeting GPIOC->BSRR (X), both triggered by TIM2_UP (expected on Stream1/Stream7, Channel 3). Exact stream/channel assignment TBD pending verification against RM0090's DMA1 request-mapping table — the RM0090 PDF currently in this repository is a placeholder file and must be replaced before this can be confirmed. The Ethernet MAC uses its own dedicated DMA engine (not DMA1/DMA2), so no conflict is expected there.
 STEP generation mode: DMA-driven GPIO BSRR writes (not PWM/Output Compare) — see ADR-001 in Docs/FIRMWARE-ARCHITECTURE.md §41.
+Firmware execution model: Bare-metal, interrupt-driven superloop (no RTOS) — see ADR-003 in Docs/FIRMWARE-ARCHITECTURE.md §41.
 DIR generation method: TBD.
 Motion buffer architecture: TBD.
 Interpolation method: TBD.

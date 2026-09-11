@@ -126,14 +126,14 @@ Mach3-based-industrial-CNC-controller/
 ├── MACH3/
 │   ├── Current Includes Files from Mach3 Software Develope Kit.zip
 │   ├── Mach3 Software Development Kit(SDK).zip
-│   └── SDK_README.MD
+│   └── SDK-README.MD
 │
 ├── STM32_DOCs/
 │   ├── Cortex-M4_Programming_Manual/
 │   ├── Datasheet/
 │   ├── Errata/
 │   ├── Reference_Manual/
-│   ├── application note/
+│   ├── application_note/
 │   └── stm32_github_reference/
 │
 └── README.md
@@ -152,7 +152,7 @@ Mach3-based-industrial-CNC-controller/
 | [`Docs/FIRMWARE-ARCHITECTURE.md`](Docs/FIRMWARE-ARCHITECTURE.md) | Firmware subsystem boundaries, priorities, real-time rules, safety and AI-development constraints |
 | [`Docs/MOTION-ENGINE.md`](Docs/MOTION-ENGINE.md) | STEP/DIR timing requirements, multi-axis behavior, buffering and acceptance criteria |
 | [`Docs/ETHERNET.md`](Docs/ETHERNET.md) | LAN8720A/RMII, Ethernet MAC/DMA, LwIP and UDP architecture |
-| [`MACH3/SDK_README.MD`](MACH3/SDK_README.MD) | Rules and guidance for Mach3 SDK integration |
+| [`MACH3/SDK-README.MD`](MACH3/SDK-README.MD) | Rules and guidance for Mach3 SDK integration |
 
 ### Recommended Reading Order
 
@@ -162,7 +162,7 @@ Mach3-based-industrial-CNC-controller/
 4. `Docs/FIRMWARE-ARCHITECTURE.md`
 5. `Docs/MOTION-ENGINE.md`
 6. `Docs/ETHERNET.md`
-7. `MACH3/SDK_README.MD`
+7. `MACH3/SDK-README.MD`
 8. `STM32_DOCs/` whenever a decision depends on exact STM32 behavior
 
 ---
@@ -232,8 +232,9 @@ Fixed project-level requirements include:
 - The 2 MHz requirement is not considered verified until it is measured on the final hardware.
 
 The STEP generation architecture is fixed as DMA-driven GPIO BSRR updates.
-The remaining implementation details include DMA stream allocation, BSRR buffering,
-and the base timer used as the DMA request source.
+The base timer used as the DMA request source is **TIM2** (see ADR-002 in
+`Docs/FIRMWARE-ARCHITECTURE.md`). The remaining implementation details are the
+exact DMA stream/channel allocation and BSRR buffering.
 
 ---
 
@@ -298,6 +299,8 @@ Do not invent Mach3 SDK APIs, structures, constants or behavior. Any host-contro
 
 These sources should be consulted before making hardware-dependent implementation decisions.
 
+> **Known gap:** the PDF files for the STM32F407VG datasheet, the RM0090 reference manual, and the STM32F405/407 errata (`STM32_DOCs/Datasheet/`, `STM32_DOCs/Reference_Manual/`, `STM32_DOCs/Errata/`) are currently placeholder files (2 bytes each), not the real documents. Several open verification items — including the exact DMA1 stream/channel for the STEP-generation timer (ADR-002) and any AF/pin-level facts — cannot be checked against the authoritative source until valid copies of these three files are uploaded.
+
 ---
 
 ## AI-Assisted Development Rules
@@ -336,7 +339,9 @@ This repository is intended to be developed with AI assistance. The following ru
 | Motion engine requirements | Documented |
 | Ethernet/LwIP architecture | Documented |
 | `Firmware/` STM32CubeIDE project | In preparation / implementation in progress |
-| Final timer/DMA allocation | TBD / implementation decision |
+| STEP-DMA base timer | TIM2 selected (ADR-002); exact DMA stream/channel pending RM0090 verification |
+| Firmware execution model | Bare-metal, interrupt-driven superloop (ADR-003) |
+| STM32 Datasheet / RM0090 / Errata PDFs | Placeholder files — need re-upload before hardware-level verification |
 | Final UDP application protocol | TBD |
 | Verified 3-axis @ 2 MHz performance | Not yet validated |
 | Production-ready firmware | Not yet complete |

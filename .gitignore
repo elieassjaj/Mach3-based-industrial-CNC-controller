@@ -1,0 +1,24 @@
+# STM32CubeIDE / Eclipse CDT build output — do not track generated binaries
+Debug/
+Release/
+**/Debug/
+**/Release/
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.su
+
+# STM32CubeIDE workspace metadata (machine-specific, not part of the project)
+.metadata/
+
+# Keep everything else in Firmware/ (the .ioc, .project, .cproject, .mxproject,
+# Core/, Drivers/, Middlewares/, linker script, startup file, etc.) tracked as
+# plain files — see README.md for what belongs in the Firmware/ tree.
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

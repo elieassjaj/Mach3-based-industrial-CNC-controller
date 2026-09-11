@@ -37,7 +37,7 @@ These pins are designated for high-speed pulse generation (up to 2 MHz) and are 
 
 ## Peripherals & Outputs (GPIOB)
 
-* **SPINDLE_PWM_PIN:** `PB4` (`GPIO_PIN_4`) — Must be configured as TIM Alternate Function (e.g., TIM3_CH1) with a 10 kHz frequency.
+* **SPINDLE_PWM_PIN:** `PB4` (`GPIO_PIN_4`) — Must be configured as TIM Alternate Function (e.g., TIM3_CH1) with a 10 kHz frequency. `PB4` defaults to the `NJTRST` function on the STM32F407; using it as `TIM3_CH1` requires the debug interface to run in SWD-only mode (see `Docs/FIRMWARE-ARCHITECTURE.md` §29). This project uses SWD-only debug/programming, so this pin assignment is valid as-is.
 * **RELAY_PIN:** `PB8` (`GPIO_PIN_8`)
 * **LED_RUN_PIN:** `PB2` (`GPIO_PIN_2`)
 * **LED_ERROR_PIN:** `PB1` (`GPIO_PIN_1`)
