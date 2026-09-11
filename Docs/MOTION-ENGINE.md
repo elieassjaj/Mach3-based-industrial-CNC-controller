@@ -1036,7 +1036,7 @@ When the final architecture is selected, document the major decisions here or in
 At minimum document:
 
 ```text
-Timer allocation: One base timer drives the shared DMA trigger for STEP generation (specific timer TBD — candidate: TIM6 or TIM7).
+Timer allocation: One base timer drives the shared DMA trigger for STEP generation (specific timer TBD — candidate: TIM2 or TIM3).
 DMA allocation: Two DMA streams — one targeting GPIOA->BSRR (Y, Z, A, B), one targeting GPIOC->BSRR (X). Specific stream/channel numbers TBD, pending conflict check against Ethernet DMA.
 STEP generation mode: DMA-driven GPIO BSRR writes (not PWM/Output Compare) — see ADR-001 in Docs/FIRMWARE-ARCHITECTURE.md §41.
 DIR generation method: TBD.
