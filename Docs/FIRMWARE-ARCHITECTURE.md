@@ -1341,9 +1341,11 @@ Validation result
 ```
 ### ADR-001 — STEP Pulse Generation Method
 
-**Decision:** STEP pulses for all five axes (PC9, PA8, PA9, PA10, PA11) are generated via a shared base timer whose Update event triggers DMA transfers directly into each GPIO port's BSRR register (`GPIOA->BSRR` for Y/Z/A/B, `GPIOC->BSRR` for X). The pins are configured as standard GPIO Output (Push-Pull), **not** Alternate Function — native PWM/Output-Compare generation is intentionally not used.
+**Decision:** STEP pulses for all five axes (`PA8`–`PA12`, per ADR-005) are generated via a shared base timer whose Update event triggers DMA transfers directly into `GPIOA->BSRR`. The pins are configured as standard GPIO Output (Push-Pull), **not** Alternate Function — native PWM/Output-Compare generation is intentionally not used.
 
-**Reason:** PA8–PA11 correspond to TIM1_CH1–CH4, which share a single ARR (period) register. Native PWM/Output-Compare would therefore force axes Y, Z, A, and B onto one common STEP frequency, which conflicts with the project requirement that each axis run at an independently commanded step rate (e.g. during a coordinated multi-axis move). DMA-to-BSRR decouples each axis's effective frequency from any single timer's shared period.
+*(Historical note: the original version of this decision placed STEP_X on `PC9`, split across `GPIOA`+`GPIOC` with two DMA streams. ADR-005 consolidated all five STEP pins onto `GPIOA`/a single stream; the paragraphs below are updated to match, but the core decision — DMA-to-BSRR instead of PWM/Output-Compare — is unchanged.)*
+
+**Reason:** PA8–PA11 correspond to TIM1_CH1–CH4, which share a single ARR (period) register. Native PWM/Output-Compare would therefore force axes X, Y, Z, and A onto one common STEP frequency, which conflicts with the project requirement that each axis run at an independently commanded step rate (e.g. during a coordinated multi-axis move). DMA-to-BSRR decouples each axis's effective frequency from any single timer's shared period.
 
 **Alternatives considered:**
 - *Native PWM/Output-Compare per channel* — rejected: shared-ARR constraint above.
@@ -1351,11 +1353,11 @@ Validation result
 
 **Timing impact:** Each axis's STEP frequency becomes fully independent of the others. Jitter is bounded by base-timer resolution and DMA transfer latency — exact figures **TBD**, pending hardware measurement (Section 39).
 
-**Memory impact:** One DMA buffer per port (GPIOA, GPIOC), sized to the interpolation tick depth — exact size **TBD**.
+**Memory impact:** One DMA buffer (single `GPIOA` port, per ADR-005), sized to the interpolation tick depth — exact size **TBD**.
 
 **CPU impact:** Near-zero during steady-state pulse generation; CPU only refills buffers at a lower, batched rate.
 
-**Risks:** Requires two DMA streams/masks (one per port) instead of one; must be checked against Ethernet DMA stream usage for conflicts — **TBD**.
+**Risks:** None specific to DMA stream count after ADR-005 (single stream); Ethernet DMA independence confirmed in ADR-002/ADR-004 (separate DMA engine entirely).
 
 **Validation result:** TBD — pending real-hardware testing (≥3 axes simultaneously at 2 MHz, per Section 39).
 
@@ -1363,11 +1365,14 @@ Validation result
 
 ### ADR-002 — STEP-Generation Base Timer & DMA Allocation
 
-**Decision:** `TIM2` is the shared base timer whose Update event triggers the STEP-generation DMA transfers established in ADR-001. `TIM2`'s Update-event DMA request (`TIM2_UP`) is serviced through **DMA1**: per RM0090 Rev 22, Table 43 ("DMA1 request mapping"), `TIM2_UP` is available on both `DMA1 Stream1/Channel3` and `DMA1 Stream7/Channel3`. This project uses **both**, driven by the same `TIM2` Update event (`TIM2->DIER.UDE`, with `CC3DE`/`CC4DE` left disabled so each slot is sourced purely by the Update event, not the coincident `TIM2_CH3`/`TIM2_CH4` requests that share those slots):
-  - `DMA1_Stream1`, `Channel 3` → `GPIOA->BSRR` (Y/Z/A/B)
-  - `DMA1_Stream7`, `Channel 3` → `GPIOC->BSRR` (X)
+**Decision:** `TIM2` is the shared base timer whose Update event triggers the STEP-generation DMA transfer established in ADR-001. `TIM2`'s Update-event DMA request (`TIM2_UP`) is serviced through **DMA1**: per RM0090 Rev 22, Table 43 ("DMA1 request mapping"), `TIM2_UP` is available on both `DMA1 Stream1/Channel3` and `DMA1 Stream7/Channel3`.
 
-Both streams are independently triggered by the same physical `TIM2_UP` request, which the DMA controller's request matrix broadcasts to every stream whose channel selector is armed for it — this is exactly the scenario ST's "alternate stream mapping" exists for, and is confirmed directly from RM0090 rather than assumed.
+Since ADR-005 consolidated all five STEP pins onto `GPIOA`, only **one** of these two slots is needed for STEP:
+  - `DMA1_Stream1`, `Channel 3` → `GPIOA->BSRR` (X/Y/Z/A/B, all five axes in one transfer)
+
+`DMA1_Stream7`/`Channel 3` (the alternate `TIM2_UP` slot) is **not used by STEP** and is reserved as the natural candidate for a future DIR-DMA path (`GPIOD->BSRR`), should the DIR generation method (`Docs/MOTION-ENGINE.md` Section 27) later choose one. `TIM2->DIER.UDE` is enabled to source the request; `CC3DE` is left disabled so the slot is sourced purely by the Update event, not the coincident `TIM2_CH3` request that shares it.
+
+*(This confirms and simplifies the two-stream plan in an earlier revision of this ADR — see the historical note in ADR-001/ADR-005.)*
 
 **Reason:**
 - `Docs/MOTION-ENGINE.md` Section 33 originally named `TIM2` or `TIM3` as candidates. `TIM3_CH1` (`PB4`) is already committed to Spindle PWM at a fixed 10 kHz period (`Docs/PINOUT.md`). Sharing `TIM3` between Spindle PWM and the STEP-DMA base rate would recreate the same shared-ARR conflict ADR-001 already rejected for `TIM1` — the spindle's fixed 10 kHz period and the STEP base tick rate would be forced to share one period register. `TIM2` has no other confirmed use in this project and avoids the conflict entirely.
@@ -1381,7 +1386,7 @@ Both streams are independently triggered by the same physical `TIM2_UP` request,
 
 **Timing impact:** Unchanged from ADR-001 — base-tick jitter remains bounded by timer update-event timing and DMA arbitration latency; exact figures **TBD**, pending hardware measurement (Section 39).
 
-**Memory impact:** Unchanged from ADR-001 (one DMA buffer per GPIO port).
+**Memory impact:** Unchanged from ADR-001 (one DMA buffer, single `GPIOA` port).
 
 **CPU impact:** None beyond ADR-001; `TIM2` configuration is a one-time initialization cost.
 
@@ -1461,20 +1466,20 @@ Reasoning for a 4 MHz / 250 ns base tick: the STEP generator (ADR-001) produces 
 
 Note: this fixes the **base tick rate**, not the interpolation/DDA algorithm that decides, per tick, which axis bits get set in each port's BSRR word for axes running below 2 MHz — that remains an open motion-engine decision (`Docs/MOTION-ENGINE.md` Section 27).
 
-*DMA configuration (both streams, per ADR-002):*
+*DMA configuration (single stream, per ADR-002/ADR-005):*
 
 ```text
 Stream direction        = Memory to Peripheral
-Peripheral address      = &GPIOA->BSRR (Stream1) / &GPIOC->BSRR (Stream7) — fixed, no increment
-Memory address          = per-port STEP event buffer — incrementing
+Peripheral address      = &GPIOA->BSRR — fixed, no increment
+Memory address          = STEP event buffer (all five axes) — incrementing
 Data width (both sides) = Word (32-bit) — BSRR is a 32-bit register
 Mode                    = Circular, with Half-Transfer and Transfer-Complete interrupts enabled, so the CPU refills the half of the buffer that DMA just finished with while DMA continues through the other half
 Stream priority         = Very High (this is the hard-real-time path)
 ```
 
-`STM32CubeMX`'s built-in `HAL_TIM_Base_Start_DMA()` helper targets the timer's own `ARR` register and is **not** used here; the DMA handles CubeMX generates for the `TIM2_UP` requests are instead started manually (`HAL_DMA_Start_IT()`) with the GPIO `BSRR` address, in application code — this is firmware-implementation work, not an `.ioc` setting, and comes later.
+`STM32CubeMX`'s built-in `HAL_TIM_Base_Start_DMA()` helper targets the timer's own `ARR` register and is **not** used here; the DMA handle CubeMX generates for the `TIM2_UP` request (`hdma_tim2_up`, on `DMA1_Stream1`) is instead started manually (`HAL_DMA_Start_IT()`) with the `GPIOA->BSRR` address, in application code — this is firmware-implementation work, not an `.ioc` setting, and comes later. In the `.ioc`, only one `TIM2_UP` DMA request needs to be added under `TIM2`'s DMA Settings tab; CubeMX does not support adding the same request twice to two different streams from that tab, which is a tooling limitation, not a hardware one — ADR-005's single-port consolidation sidesteps it entirely for STEP.
 
-**DIR pins (`GPIOD`, per `Docs/PINOUT.md`) are not part of this DMA scheme.** `TIM2_UP` has only two DMA1 slots (`Stream1`, `Stream7`), both already committed to the two STEP ports; there is no third slot available for a `GPIOD->BSRR` stream without a separate, `TIM2`-synchronized timer (e.g. a slave timer sharing `TIM2`'s Update event via the timer synchronization feature, RM0090 §18.3.15). Whether DIR needs the same DMA-hardware treatment, or can be managed by CPU-timed GPIO writes with a guard interval (one base tick ≥ 200 ns satisfies the DIR setup/hold requirement on its own), is still an open motion-engine decision (`Docs/MOTION-ENGINE.md` Section 27, "DIR generation implementation") and is **not** required to configure the `.ioc` at this stage.
+**DIR pins (`GPIOD`, per `Docs/PINOUT.md`) are not part of this DMA scheme.** `DMA1_Stream7`/`Channel3` (the alternate `TIM2_UP` slot, unused by STEP after ADR-005) is the natural candidate for a future DIR-DMA path to `GPIOD->BSRR` — configuring it would require manually adding a second, independent DMA handle/stream outside `TIM2`'s own CubeMX DMA-settings linkage (since that tab only wires one stream per request type), the same kind of manual step already needed for the STEP stream's `GPIOA->BSRR` redirection above. Whether DIR needs this DMA-hardware treatment at all, or can instead be managed by CPU-timed GPIO writes with a guard interval (one base tick ≥ 200 ns satisfies the DIR setup/hold requirement on its own), is still an open motion-engine decision (`Docs/MOTION-ENGINE.md` Section 27, "DIR generation implementation") and is **not** required to configure the `.ioc` at this stage.
 
 *NVIC priority scheme* (requires Priority Grouping set to 4 bits pre-emption / 0 bits sub-priority, i.e. `NVIC_PRIORITYGROUP_4`):
 
@@ -1482,12 +1487,13 @@ Stream priority         = Very High (this is the hard-real-time path)
 |---|---|---|
 | 0 (highest) | `EXTI2_IRQn` | E-STOP (`PE2`) — dedicated vector, not shared with any other input |
 | 1 | `EXTI0_IRQn`, `EXTI1_IRQn`, `EXTI3_IRQn`, `EXTI4_IRQn`, `EXTI9_5_IRQn`, `EXTI15_10_IRQn` | Remaining digital inputs (`PE0`,`PE1`,`PE3`–`PE14`) |
-| 2 | `DMA1_Stream1_IRQn`, `DMA1_Stream7_IRQn` | STEP buffer half/full-transfer refill |
+| 2 | `DMA1_Stream1_IRQn` | STEP buffer half/full-transfer refill |
 | 5 | `ETH_IRQn` | Ethernet MAC/DMA |
 | default (lowest, 15) | `SysTick_Handler` | HAL tick / LwIP timing — leave at the CubeMX/HAL default, do not raise it |
 | disabled | `TIM2_IRQn` | **Must not be enabled.** `TIM2`'s Update event drives DMA directly with zero CPU involvement per tick (Section 10); enabling its global interrupt would mean an ISR firing 4,000,000 times/second, defeating the entire point of the DMA-driven design. |
+| reserved, not yet enabled | `DMA1_Stream7_IRQn` | Reserved for a possible future DIR-DMA refill (see DIR note above); would sit at the same priority (2) as `DMA1_Stream1_IRQn` if implemented. |
 
-Priorities 3–4 are left unassigned as headroom (e.g. for a future DIR-sync timer/DMA stream, per the note above).
+Priorities 3–4 are left unassigned as headroom.
 
 `EXTI2_IRQn`'s dedicated vector (distinct from the shared `EXTI9_5_IRQn`/`EXTI15_10_IRQn` vectors that service the other inputs) means the E-STOP handler never has to share an ISR entry or scan multiple pending bits before reaching `PE2` — this is a hardware property, not a software design choice, and it directly supports Section 8's requirement that E-STOP be serviced with the lowest possible latency.
 
@@ -1502,6 +1508,42 @@ Priorities 3–4 are left unassigned as headroom (e.g. for a future DIR-sync tim
 **Risks:** The 84 MHz `TIM2` clock assumption must match the project's actual RCC configuration (`APB1` prescaler `/4`). This is self-consistent with the Spindle PWM values already configured (`TIM3` `PSC=83`, `ARR=99` → exactly 10.000 kHz only if `TIM3`'s clock, also `APB1`-derived, is 84 MHz), so both timers' numbers corroborate the same clock-tree assumption — but the `.ioc`'s Clock Configuration tab should still be checked to confirm `APB1 Timer clocks = 84 MHz` before relying on this.
 
 **Validation result:** TBD — pending real-hardware testing.
+
+---
+
+### ADR-005 — STEP Pin Consolidation onto a Single GPIO Port
+
+**Decision:** All five STEP pins are moved onto `GPIOA`, in sequential order:
+
+```text
+STEP_X = PA8
+STEP_Y = PA9
+STEP_Z = PA10
+STEP_A = PA11
+STEP_B = PA12
+```
+
+This replaces the earlier assignment (`STEP_X` on `PC9`, `STEP_Y..STEP_B` on `PA8..PA11`, split across `GPIOA`+`GPIOC` with two DMA streams). `PC9` is now unused/reserved. `Docs/PINOUT.md` is the authoritative record of this change.
+
+**Reason:**
+- **CubeMX tooling constraint (the immediate trigger for this decision):** a peripheral's DMA Settings tab (e.g. `TIM2`'s) can link a given request type (`TIM2_UP`) to only one DMA stream; there is no GUI path to add the same request a second time for a second stream. The two-port design needed exactly that (two streams, both sourced by `TIM2_UP`) and could only have been realized by manually configuring the second stream outside CubeMX's normal peripheral-DMA linkage. Consolidating onto one port needs only one stream, which CubeMX supports natively.
+- **Perfect cross-axis synchronization:** with all five STEP pins in one 32-bit word, a single `GPIOA->BSRR` DMA write updates any subset of the five axes in exactly the same bus cycle — there is no possibility of the kind of cross-port DMA arbitration skew that a two-stream/two-port design could exhibit between `GPIOA` and `GPIOC` writes, even though both were triggered by the same `TIM2_UP` event.
+- **Frees a DMA resource for DIR.** `TIM2_UP` has exactly two DMA1 slots (`Stream1`, `Stream7`, per RM0090 Table 43). The two-port STEP design consumed both, leaving none for DIR. The single-port design uses only `Stream1`, leaving `Stream7` available as the natural candidate for a future DIR-DMA path (see ADR-004's DIR note).
+- **No new pin conflicts.** `PA12` is free in `Docs/PINOUT.md` (no Ethernet, SWD, or other assigned function there — SWD uses `PA13`/`PA14`, Ethernet RMII uses `PA1`/`PA2`/`PA7`). `PA12`'s only alternate functions are `TIM1_ETR`/`USART1_RTS`/`OTG_FS_DP`, none of which are used by this project, and it is used here purely as a plain GPIO output.
+
+**Alternatives considered:**
+- *Keep the two-port split (original ADR-001/ADR-002 design)* — rejected: works electrically, but requires manually configuring a second DMA stream outside CubeMX's supported peripheral-DMA workflow for no compensating benefit, and does not free a slot for DIR.
+- *Split some other way (e.g. 3+2 across two ports)* — not evaluated; the single-port option strictly dominates any split option once all five pins fit on one port.
+
+**Timing impact:** Improves determinism relative to the two-port design (no cross-port DMA skew). No other change to ADR-001/ADR-002/ADR-004's timing analysis.
+
+**Memory impact:** Reduces from two DMA buffers to one.
+
+**CPU impact:** None beyond ADR-001/ADR-004.
+
+**Risks:** **This is a pin reassignment and must be verified against the actual PCB/schematic before being treated as final**, per this document's own hardware-change rule (Section 15/`Docs/PINOUT.md`'s closing note) — if `PC9` is already routed to the X-axis driver on fabricated hardware, this change requires a hardware/wiring change, not just a firmware/`.ioc` update. If the board is still at the schematic/prototyping stage, this is a zero-cost change.
+
+**Validation result:** TBD — pending confirmation that the change is compatible with the actual board, and pending real-hardware timing testing (Section 39).
 
 ---
 

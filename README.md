@@ -339,7 +339,7 @@ This repository is intended to be developed with AI assistance. The following ru
 | Motion engine requirements | Documented |
 | Ethernet/LwIP architecture | Documented |
 | `Firmware/` STM32CubeIDE project | In preparation / implementation in progress |
-| STEP-DMA base timer & DMA allocation | TIM2, DMA1 Stream1/Stream7 Channel3 — confirmed against RM0090 (ADR-002, ADR-004) |
+| STEP-DMA base timer & DMA allocation | TIM2, single DMA1 Stream1/Channel3, all 5 axes on GPIOA (`PA8`–`PA12`) — confirmed against RM0090 (ADR-002, ADR-004, ADR-005) |
 | Firmware execution model | Bare-metal, interrupt-driven superloop (ADR-003) |
 | STM32 Datasheet / RM0090 / Errata PDFs | Uploaded and verified |
 | CubeMX `.ioc` peripheral configuration | In progress — clock tree, GPIO, EXTI, TIM3 spindle PWM, Ethernet RMII, LwIP done; TIM2/DMA/NVIC pending |

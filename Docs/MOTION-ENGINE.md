@@ -216,14 +216,14 @@ The final implementation must preserve this principle.
 According to the project hardware definition (`Docs/PINOUT.md`):
 
 ```text
-STEP_X = PC9
-STEP_Y = PA8
-STEP_Z = PA9
-STEP_A = PA10
-STEP_B = PA11
+STEP_X = PA8
+STEP_Y = PA9
+STEP_Z = PA10
+STEP_A = PA11
+STEP_B = PA12
 ```
 
-These pins have valid timer alternate-function mappings (PA8–PA11 = TIM1_CH1–CH4; PC9 = TIM3_CH4/TIM8_CH4), but per Section 10, they are deliberately configured as plain GPIO outputs and driven via DMA→BSRR rather than via their Alternate Function — because PA8–PA11 share a single TIM1 ARR (period), which would force axes Y, Z, A, and B onto one common STEP frequency.
+All five STEP pins are on `GPIOA`, in sequential order (see ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.md`). `PA8`–`PA11` have valid `TIM1_CH1`–`CH4` alternate functions; `PA12` has no TIM1 PWM-channel alternate function (only `TIM1_ETR`). Per Section 10, all five are deliberately configured as plain GPIO outputs and driven via DMA→BSRR rather than via any Alternate Function — because `PA8`–`PA11` share a single `TIM1` ARR (period), which would force axes X, Y, Z, and A onto one common STEP frequency.
 
 The exact DMA stream/mask allocation must be taken from the authoritative project pinout and verified against the STM32F407 Datasheet and Reference Manual.
 
@@ -287,16 +287,14 @@ Current STEP output grouping is:
 
 ```text
 GPIOA:
-    PA8  = Y_STEP
-    PA9  = Z_STEP
-    PA10 = A_STEP
-    PA11 = B_STEP
-
-GPIOC:
-    PC9  = X_STEP
+    PA8  = X_STEP
+    PA9  = Y_STEP
+    PA10 = Z_STEP
+    PA11 = A_STEP
+    PA12 = B_STEP
 ```
 
-Because the STEP signals are distributed across two GPIO ports, the implementation must account for both `GPIOA->BSRR` and `GPIOC->BSRR` transfers.
+All STEP signals are on `GPIOA`, so the implementation only needs to account for `GPIOA->BSRR` transfers — a single DMA stream and a single 32-bit write per tick covers all five axes.
 
 ### Timing Requirements
 
@@ -370,14 +368,13 @@ Timer PWM / Output Compare on STEP pins:
 
 The DMA implementation must support deterministic writes to the GPIO BSRR registers.
 
-Because the STEP outputs are distributed across two GPIO ports, the design must provide a suitable DMA transfer path for:
+All STEP outputs are on a single GPIO port, so the design needs only one DMA transfer path:
 
 ```text
 GPIOA->BSRR
-GPIOC->BSRR
 ```
 
-The implementation may use separate DMA streams for the two GPIO ports, provided that both transfers remain synchronized to the intended motion timeline.
+A single DMA stream, triggered by the base timer's Update event, covers all five axes with zero cross-axis timing skew (see ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.md`). The second `TIM2_UP`-capable DMA1 slot is consequently free and available for a future DIR-DMA path, if the DIR generation method (Section 24/27) is later chosen to use one.
 
 The exact DMA stream/channel selection is **TBD** and must be verified against the STM32F407 DMA mapping and all other active peripherals.
 
@@ -1184,14 +1181,14 @@ At minimum document:
 
 ```text
 Timer allocation: TIM2 drives the shared Update-event DMA trigger for STEP generation, PSC=0/ARR=20 → 4 MHz (250 ns) base tick assuming 84 MHz TIM2 clock. TIM3 was rejected as a candidate because TIM3_CH1 (PB4) is already committed to Spindle PWM at a fixed 10 kHz period — see ADR-002 and ADR-004 in Docs/FIRMWARE-ARCHITECTURE.md §41.
-DMA allocation: Two DMA1 streams, both triggered by the same TIM2_UP event — Stream1/Channel3 → GPIOA->BSRR (Y, Z, A, B), Stream7/Channel3 → GPIOC->BSRR (X). Confirmed against RM0090 Rev 22 Table 43 (DMA1 request mapping) — see ADR-002/ADR-004. The Ethernet MAC uses its own dedicated DMA engine (not DMA1/DMA2), so no conflict is expected there. DIR (GPIOD) is not covered by this DMA scheme — TIM2_UP has only these two DMA1 slots; a third, DIR-carrying stream would require a separate TIM2-synchronized timer, which is not yet decided (see "DIR generation method" below).
+DMA allocation: A single DMA1 stream (Stream1/Channel3, triggered by TIM2_UP) → GPIOA->BSRR, covering all five axes (X, Y, Z, A, B — all on GPIOA per ADR-005). Confirmed against RM0090 Rev 22 Table 43 (DMA1 request mapping) — see ADR-002/ADR-004/ADR-005. The Ethernet MAC uses its own dedicated DMA engine (not DMA1/DMA2), so no conflict is expected there. The second TIM2_UP-capable slot (Stream7/Channel3) is left free by this consolidation and is the natural candidate for a future DIR-DMA path (GPIOD->BSRR) if the DIR generation method (below) is later chosen to use one.
 STEP generation mode: DMA-driven GPIO BSRR writes (not PWM/Output Compare) — see ADR-001 in Docs/FIRMWARE-ARCHITECTURE.md §41.
 Firmware execution model: Bare-metal, interrupt-driven superloop (no RTOS) — see ADR-003 in Docs/FIRMWARE-ARCHITECTURE.md §41.
 DIR generation method: TBD — whether DIR needs its own DMA/timer-hardware path (see DMA allocation above) or can use CPU-timed GPIO writes with a one-base-tick (250 ns) guard interval, which already exceeds the 200 ns setup/hold requirement, is not yet decided.
 Motion buffer architecture: TBD.
 Interpolation method: TBD.
 Position representation: TBD.
-Interrupt priorities: Fixed for the peripherals configured so far — EXTI2 (E-STOP) highest, other EXTI next, DMA1 Stream1/Stream7 (STEP refill) next, ETH lower, SysTick lowest, TIM2 global interrupt disabled — see ADR-004 in Docs/FIRMWARE-ARCHITECTURE.md §41. Priorities for not-yet-configured peripherals remain TBD.
+Interrupt priorities: Fixed for the peripherals configured so far — EXTI2 (E-STOP) highest, other EXTI next, DMA1 Stream1 (STEP refill) next, ETH lower, SysTick lowest, TIM2 global interrupt disabled — see ADR-004 in Docs/FIRMWARE-ARCHITECTURE.md §41. Priorities for not-yet-configured peripherals (including a possible future DMA1 Stream7 for DIR) remain TBD.
 Maximum measured STEP rate: TBD — not yet tested on hardware.
 Maximum measured simultaneous axis rate: TBD — not yet tested on hardware.
 Measured jitter: TBD.

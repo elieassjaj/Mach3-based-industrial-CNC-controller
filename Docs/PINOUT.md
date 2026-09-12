@@ -4,19 +4,22 @@ This document outlines the complete hardware pinout for the Mach3-Based 5-Axis I
 
 ---
 
-## STEP Pins (GPIOA 8..11 + GPIOC 9, via DMA → GPIO BSRR)
+## STEP Pins (GPIOA 8..12, via DMA → GPIO BSRR)
 
-These pins are designated for high-speed pulse generation (up to 2 MHz) and are controlled exclusively via DMA writes to each port's BSRR register, triggered by a shared base timer's Update event. They are configured as standard GPIO Output (Push-Pull) — **not** Alternate Function. Even though PA8/PA9/PA10/PA11 have valid TIM1_CH1–CH4 alternate functions, PWM/Output-Compare generation is intentionally not used here, because all four TIM1 channels share a single ARR (period register), which would force axes Y, Z, A, and B onto one common step frequency. DMA-to-BSRR keeps every axis's frequency fully independent.
+These pins are designated for high-speed pulse generation (up to 2 MHz) and are controlled exclusively via a single DMA stream writing to `GPIOA->BSRR`, triggered by a shared base timer's Update event (see ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.md`). They are configured as standard GPIO Output (Push-Pull) — **not** Alternate Function. Even though PA8/PA9/PA10/PA11 have valid TIM1_CH1–CH4 alternate functions, PWM/Output-Compare generation is intentionally not used here, because all four TIM1 channels share a single ARR (period register), which would force axes X, Y, Z, and A onto one common step frequency. `PA12` has no TIM1 PWM-channel alternate function at all (only `TIM1_ETR`), so it introduces no equivalent conflict. DMA-to-BSRR keeps every axis's frequency fully independent.
 
-- **STEP_X_PIN:** `PC9` (`GPIO_PIN_9`), port `GPIOC`
-- **STEP_Y_PIN:** `PA8` (`GPIO_PIN_8`), port `GPIOA`
-- **STEP_Z_PIN:** `PA9` (`GPIO_PIN_9`), port `GPIOA`
-- **STEP_A_PIN:** `PA10` (`GPIO_PIN_10`), port `GPIOA`
-- **STEP_B_PIN:** `PA11` (`GPIO_PIN_11`), port `GPIOA`
-- *Note:* STEP pins now span **two GPIO ports**, so two separate DMA transfers/masks are required:
-  - `STEP_PINS_MASK_GPIOA` = `(0x0F00)` (Bits 8–11 → Y, Z, A, B → `GPIOA->BSRR`)
-  - `STEP_PINS_MASK_GPIOC` = `(0x0200)` (Bit 9 → X → `GPIOC->BSRR`)
+All five STEP pins are on the **same GPIO port (GPIOA)**, in sequential order, so a single DMA stream and a single 32-bit `GPIOA->BSRR` write can update any subset of the five axes in one transfer, with zero timing skew between axes.
+
+- **STEP_X_PIN:** `PA8` (`GPIO_PIN_8`), port `GPIOA`
+- **STEP_Y_PIN:** `PA9` (`GPIO_PIN_9`), port `GPIOA`
+- **STEP_Z_PIN:** `PA10` (`GPIO_PIN_10`), port `GPIOA`
+- **STEP_A_PIN:** `PA11` (`GPIO_PIN_11`), port `GPIOA`
+- **STEP_B_PIN:** `PA12` (`GPIO_PIN_12`), port `GPIOA`
+- *Note:* Single combined mask: `STEP_PINS_MASK_GPIOA` = `(0x1F00)` (Bits 8–12 → X, Y, Z, A, B → `GPIOA->BSRR`)
 - *Note:* PWM/Output-Compare (Alternate Function) generation is **not** used for these pins, regardless of what their native alternate functions support.
+- *Note:* `PC9` (the former `STEP_X` location) is now unused/reserved; do not configure it as `STEP_X` in the `.ioc`.
+
+> **Hardware note:** This pin assignment was changed from an earlier revision (`STEP_X` on `PC9`, split across `GPIOA`+`GPIOC`) to consolidate all five STEP pins on `GPIOA`. Per this document's own rule (below), verify this against the actual PCB/schematic before finalizing — if `PC9` is already routed to the X-axis driver on fabricated hardware, this reassignment requires a hardware change, not just a firmware/`.ioc` change.
 ---
 
 ## DIRECTION Pins (GPIOD 8..12)
@@ -101,11 +104,11 @@ The following Ethernet signals use fixed hardware routing between the STM32F407V
 
 | Function | STM32F407VGT6 |
 |---|---|
-| STEP X | `PC9` |
-| STEP Y | `PA8` |
-| STEP Z | `PA9` |
-| STEP A | `PA10` |
-| STEP B | `PA11` |
+| STEP X | `PA8` |
+| STEP Y | `PA9` |
+| STEP Z | `PA10` |
+| STEP A | `PA11` |
+| STEP B | `PA12` |
 | DIR X | `PD8` |
 | DIR Y | `PD9` |
 | DIR Z | `PD10` |
