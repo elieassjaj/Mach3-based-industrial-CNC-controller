@@ -1183,15 +1183,15 @@ When the final architecture is selected, document the major decisions here or in
 At minimum document:
 
 ```text
-Timer allocation: TIM2 drives the shared Update-event DMA trigger for STEP generation. TIM3 was rejected as a candidate because TIM3_CH1 (PB4) is already committed to Spindle PWM at a fixed 10 kHz period — see ADR-002 in Docs/FIRMWARE-ARCHITECTURE.md §41.
-DMA allocation: Two DMA1 streams — one targeting GPIOA->BSRR (Y, Z, A, B), one targeting GPIOC->BSRR (X), both triggered by TIM2_UP (expected on Stream1/Stream7, Channel 3). Exact stream/channel assignment TBD pending verification against RM0090's DMA1 request-mapping table — the RM0090 PDF currently in this repository is a placeholder file and must be replaced before this can be confirmed. The Ethernet MAC uses its own dedicated DMA engine (not DMA1/DMA2), so no conflict is expected there.
+Timer allocation: TIM2 drives the shared Update-event DMA trigger for STEP generation, PSC=0/ARR=20 → 4 MHz (250 ns) base tick assuming 84 MHz TIM2 clock. TIM3 was rejected as a candidate because TIM3_CH1 (PB4) is already committed to Spindle PWM at a fixed 10 kHz period — see ADR-002 and ADR-004 in Docs/FIRMWARE-ARCHITECTURE.md §41.
+DMA allocation: Two DMA1 streams, both triggered by the same TIM2_UP event — Stream1/Channel3 → GPIOA->BSRR (Y, Z, A, B), Stream7/Channel3 → GPIOC->BSRR (X). Confirmed against RM0090 Rev 22 Table 43 (DMA1 request mapping) — see ADR-002/ADR-004. The Ethernet MAC uses its own dedicated DMA engine (not DMA1/DMA2), so no conflict is expected there. DIR (GPIOD) is not covered by this DMA scheme — TIM2_UP has only these two DMA1 slots; a third, DIR-carrying stream would require a separate TIM2-synchronized timer, which is not yet decided (see "DIR generation method" below).
 STEP generation mode: DMA-driven GPIO BSRR writes (not PWM/Output Compare) — see ADR-001 in Docs/FIRMWARE-ARCHITECTURE.md §41.
 Firmware execution model: Bare-metal, interrupt-driven superloop (no RTOS) — see ADR-003 in Docs/FIRMWARE-ARCHITECTURE.md §41.
-DIR generation method: TBD.
+DIR generation method: TBD — whether DIR needs its own DMA/timer-hardware path (see DMA allocation above) or can use CPU-timed GPIO writes with a one-base-tick (250 ns) guard interval, which already exceeds the 200 ns setup/hold requirement, is not yet decided.
 Motion buffer architecture: TBD.
 Interpolation method: TBD.
 Position representation: TBD.
-Interrupt priorities: TBD.
+Interrupt priorities: Fixed for the peripherals configured so far — EXTI2 (E-STOP) highest, other EXTI next, DMA1 Stream1/Stream7 (STEP refill) next, ETH lower, SysTick lowest, TIM2 global interrupt disabled — see ADR-004 in Docs/FIRMWARE-ARCHITECTURE.md §41. Priorities for not-yet-configured peripherals remain TBD.
 Maximum measured STEP rate: TBD — not yet tested on hardware.
 Maximum measured simultaneous axis rate: TBD — not yet tested on hardware.
 Measured jitter: TBD.

@@ -299,7 +299,7 @@ Do not invent Mach3 SDK APIs, structures, constants or behavior. Any host-contro
 
 These sources should be consulted before making hardware-dependent implementation decisions.
 
-> **Known gap:** the PDF files for the STM32F407VG datasheet, the RM0090 reference manual, and the STM32F405/407 errata (`STM32_DOCs/Datasheet/`, `STM32_DOCs/Reference_Manual/`, `STM32_DOCs/Errata/`) are currently placeholder files (2 bytes each), not the real documents. Several open verification items — including the exact DMA1 stream/channel for the STEP-generation timer (ADR-002) and any AF/pin-level facts — cannot be checked against the authoritative source until valid copies of these three files are uploaded.
+The STM32F407VG datasheet, RM0090 (Rev 22), and the STM32F405/407 errata are now valid, complete copies. The DMA1 request-mapping table (RM0090 Table 43) has been consulted directly and confirms the `TIM2_UP` stream/channel assignment recorded in ADR-002/ADR-004.
 
 ---
 
@@ -339,9 +339,10 @@ This repository is intended to be developed with AI assistance. The following ru
 | Motion engine requirements | Documented |
 | Ethernet/LwIP architecture | Documented |
 | `Firmware/` STM32CubeIDE project | In preparation / implementation in progress |
-| STEP-DMA base timer | TIM2 selected (ADR-002); exact DMA stream/channel pending RM0090 verification |
+| STEP-DMA base timer & DMA allocation | TIM2, DMA1 Stream1/Stream7 Channel3 — confirmed against RM0090 (ADR-002, ADR-004) |
 | Firmware execution model | Bare-metal, interrupt-driven superloop (ADR-003) |
-| STM32 Datasheet / RM0090 / Errata PDFs | Placeholder files — need re-upload before hardware-level verification |
+| STM32 Datasheet / RM0090 / Errata PDFs | Uploaded and verified |
+| CubeMX `.ioc` peripheral configuration | In progress — clock tree, GPIO, EXTI, TIM3 spindle PWM, Ethernet RMII, LwIP done; TIM2/DMA/NVIC pending |
 | Final UDP application protocol | TBD |
 | Verified 3-axis @ 2 MHz performance | Not yet validated |
 | Production-ready firmware | Not yet complete |

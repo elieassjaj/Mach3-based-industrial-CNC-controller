@@ -1363,7 +1363,11 @@ Validation result
 
 ### ADR-002 — STEP-Generation Base Timer & DMA Allocation
 
-**Decision:** `TIM2` is the shared base timer whose Update event triggers the STEP-generation DMA transfers established in ADR-001. `TIM2`'s Update-event DMA request (`TIM2_UP`) is expected to be serviced through **DMA1** (request mapping places `TIM2_UP` on `Stream 1`/`Channel 3`, with `Stream 7`/`Channel 3` available as the alternate mapping) — one stream feeding `GPIOA->BSRR` (Y/Z/A/B) and the other feeding `GPIOC->BSRR` (X), both triggered from the same `TIM2_UP` event.
+**Decision:** `TIM2` is the shared base timer whose Update event triggers the STEP-generation DMA transfers established in ADR-001. `TIM2`'s Update-event DMA request (`TIM2_UP`) is serviced through **DMA1**: per RM0090 Rev 22, Table 43 ("DMA1 request mapping"), `TIM2_UP` is available on both `DMA1 Stream1/Channel3` and `DMA1 Stream7/Channel3`. This project uses **both**, driven by the same `TIM2` Update event (`TIM2->DIER.UDE`, with `CC3DE`/`CC4DE` left disabled so each slot is sourced purely by the Update event, not the coincident `TIM2_CH3`/`TIM2_CH4` requests that share those slots):
+  - `DMA1_Stream1`, `Channel 3` → `GPIOA->BSRR` (Y/Z/A/B)
+  - `DMA1_Stream7`, `Channel 3` → `GPIOC->BSRR` (X)
+
+Both streams are independently triggered by the same physical `TIM2_UP` request, which the DMA controller's request matrix broadcasts to every stream whose channel selector is armed for it — this is exactly the scenario ST's "alternate stream mapping" exists for, and is confirmed directly from RM0090 rather than assumed.
 
 **Reason:**
 - `Docs/MOTION-ENGINE.md` Section 33 originally named `TIM2` or `TIM3` as candidates. `TIM3_CH1` (`PB4`) is already committed to Spindle PWM at a fixed 10 kHz period (`Docs/PINOUT.md`). Sharing `TIM3` between Spindle PWM and the STEP-DMA base rate would recreate the same shared-ARR conflict ADR-001 already rejected for `TIM1` — the spindle's fixed 10 kHz period and the STEP base tick rate would be forced to share one period register. `TIM2` has no other confirmed use in this project and avoids the conflict entirely.
@@ -1382,8 +1386,8 @@ Validation result
 **CPU impact:** None beyond ADR-001; `TIM2` configuration is a one-time initialization cost.
 
 **Risks / open items:**
-- The exact DMA1 stream/channel assignment (which of `Stream 1`/`Stream 7` feeds `GPIOA` vs `GPIOC`) must still be confirmed against RM0090's DMA1 request-mapping table before implementation. **The RM0090 PDF currently checked into this repository (`STM32_DOCs/Reference_Manual/`) is a 2-byte placeholder file, not the real document, and must be replaced with a valid copy before this mapping can be verified against the authoritative source**, per the project's source-of-truth rule (Section 13).
-- `TIM2`'s clock source, prescaler, and the resulting base-tick rate are motion-engine implementation decisions (`Docs/MOTION-ENGINE.md` Section 27) and remain **TBD**.
+- ~~DMA1 stream/channel assignment~~ — resolved above against the real RM0090 (Table 43).
+- Motion-engine-level details (interpolation/DDA algorithm, DIR-pin DMA/synchronization strategy, motion buffer depth) remain open per `Docs/MOTION-ENGINE.md` Section 27; see ADR-004 for the base-tick rate and NVIC configuration that were fixed alongside this timer/DMA selection.
 
 **Validation result:** TBD — pending real-hardware testing.
 
@@ -1435,6 +1439,69 @@ Ethernet MAC/DMA IRQ                   → hand-off into LwIP        (lower prio
 **Risks:** If a future requirement introduces genuinely independent, long-running, or blocking background work (e.g. a firmware-update-over-Ethernet mechanism — currently **NOT IMPLEMENTED** per `Docs/ETHERNET.md` Section 29), that work must not be added to the same superloop without re-evaluating this decision; this is exactly the case the hybrid alternative above exists for.
 
 **Validation result:** TBD — pending measurement of worst-case superloop iteration time under maximum Ethernet + motion load (Section 39; `Docs/MOTION-ENGINE.md` Section 29).
+
+---
+
+### ADR-004 — TIM2 Base-Tick Configuration, DMA Transfer Parameters, and NVIC Priority Scheme
+
+**Decision:**
+
+*TIM2 configuration (assuming the standard 168 MHz clock tree from the 8 MHz HSE — `APB1` prescaler `/4` → `PCLK1` = 42 MHz → `TIM2` clock = 84 MHz via the RCC "×2 when APBx prescaler ≠ 1" rule, RM0090 Figure 16):*
+
+```text
+Prescaler (PSC)      = 0
+Counter Period (ARR) = 20
+Counter Mode         = Up
+Auto-reload preload  = Enable
+```
+
+`(PSC+1)×(ARR+1) = 1×21 = 21` → Update-event rate = 84 MHz / 21 = **4.000 MHz exactly** (250 ns base tick).
+
+Reasoning for a 4 MHz / 250 ns base tick: the STEP generator (ADR-001) produces each edge as two BSRR phases — a SET tick and a RESET tick. To reach the fixed 2 MHz / 500 ns STEP-period requirement, a period must contain at least one SET tick and one RESET tick, i.e. tick period ≤ 250 ns → base rate ≥ 4 MHz. 4 MHz is the coarsest (lowest DMA-bandwidth) base rate that still meets the 2 MHz requirement, and at that rate it produces a 250 ns STEP pulse width — 150 ns above the 100 ns minimum in Section 5/Acceptance Criteria of `Docs/MOTION-ENGINE.md`. A faster base tick would not widen the pulse further (it would still be built from the same number of phases) and would only increase DMA transaction count for no benefit — so 4 MHz is the margin-preserving choice, not a corner-cutting one.
+
+Note: this fixes the **base tick rate**, not the interpolation/DDA algorithm that decides, per tick, which axis bits get set in each port's BSRR word for axes running below 2 MHz — that remains an open motion-engine decision (`Docs/MOTION-ENGINE.md` Section 27).
+
+*DMA configuration (both streams, per ADR-002):*
+
+```text
+Stream direction        = Memory to Peripheral
+Peripheral address      = &GPIOA->BSRR (Stream1) / &GPIOC->BSRR (Stream7) — fixed, no increment
+Memory address          = per-port STEP event buffer — incrementing
+Data width (both sides) = Word (32-bit) — BSRR is a 32-bit register
+Mode                    = Circular, with Half-Transfer and Transfer-Complete interrupts enabled, so the CPU refills the half of the buffer that DMA just finished with while DMA continues through the other half
+Stream priority         = Very High (this is the hard-real-time path)
+```
+
+`STM32CubeMX`'s built-in `HAL_TIM_Base_Start_DMA()` helper targets the timer's own `ARR` register and is **not** used here; the DMA handles CubeMX generates for the `TIM2_UP` requests are instead started manually (`HAL_DMA_Start_IT()`) with the GPIO `BSRR` address, in application code — this is firmware-implementation work, not an `.ioc` setting, and comes later.
+
+**DIR pins (`GPIOD`, per `Docs/PINOUT.md`) are not part of this DMA scheme.** `TIM2_UP` has only two DMA1 slots (`Stream1`, `Stream7`), both already committed to the two STEP ports; there is no third slot available for a `GPIOD->BSRR` stream without a separate, `TIM2`-synchronized timer (e.g. a slave timer sharing `TIM2`'s Update event via the timer synchronization feature, RM0090 §18.3.15). Whether DIR needs the same DMA-hardware treatment, or can be managed by CPU-timed GPIO writes with a guard interval (one base tick ≥ 200 ns satisfies the DIR setup/hold requirement on its own), is still an open motion-engine decision (`Docs/MOTION-ENGINE.md` Section 27, "DIR generation implementation") and is **not** required to configure the `.ioc` at this stage.
+
+*NVIC priority scheme* (requires Priority Grouping set to 4 bits pre-emption / 0 bits sub-priority, i.e. `NVIC_PRIORITYGROUP_4`):
+
+| Priority | Vector(s) | Role |
+|---|---|---|
+| 0 (highest) | `EXTI2_IRQn` | E-STOP (`PE2`) — dedicated vector, not shared with any other input |
+| 1 | `EXTI0_IRQn`, `EXTI1_IRQn`, `EXTI3_IRQn`, `EXTI4_IRQn`, `EXTI9_5_IRQn`, `EXTI15_10_IRQn` | Remaining digital inputs (`PE0`,`PE1`,`PE3`–`PE14`) |
+| 2 | `DMA1_Stream1_IRQn`, `DMA1_Stream7_IRQn` | STEP buffer half/full-transfer refill |
+| 5 | `ETH_IRQn` | Ethernet MAC/DMA |
+| default (lowest, 15) | `SysTick_Handler` | HAL tick / LwIP timing — leave at the CubeMX/HAL default, do not raise it |
+| disabled | `TIM2_IRQn` | **Must not be enabled.** `TIM2`'s Update event drives DMA directly with zero CPU involvement per tick (Section 10); enabling its global interrupt would mean an ISR firing 4,000,000 times/second, defeating the entire point of the DMA-driven design. |
+
+Priorities 3–4 are left unassigned as headroom (e.g. for a future DIR-sync timer/DMA stream, per the note above).
+
+`EXTI2_IRQn`'s dedicated vector (distinct from the shared `EXTI9_5_IRQn`/`EXTI15_10_IRQn` vectors that service the other inputs) means the E-STOP handler never has to share an ISR entry or scan multiple pending bits before reaching `PE2` — this is a hardware property, not a software design choice, and it directly supports Section 8's requirement that E-STOP be serviced with the lowest possible latency.
+
+**Alternatives considered:** A finer base tick (e.g. 8 MHz) was considered and rejected — see Reasoning above, it does not improve STEP pulse width at the 2 MHz ceiling and only adds DMA overhead.
+
+**Timing impact:** Establishes the concrete numbers behind ADR-001/ADR-002's timing claims; exact jitter and worst-case latency remain **TBD** pending hardware measurement (Section 39).
+
+**Memory impact:** No change from ADR-001/ADR-002.
+
+**CPU impact:** Buffer refill now runs at the half-buffer/full-buffer DMA interrupt rate rather than per-tick — the exact rate depends on the motion-engine buffer depth (still TBD, Section 26/`Docs/MOTION-ENGINE.md` Section 16).
+
+**Risks:** The 84 MHz `TIM2` clock assumption must match the project's actual RCC configuration (`APB1` prescaler `/4`). This is self-consistent with the Spindle PWM values already configured (`TIM3` `PSC=83`, `ARR=99` → exactly 10.000 kHz only if `TIM3`'s clock, also `APB1`-derived, is 84 MHz), so both timers' numbers corroborate the same clock-tree assumption — but the `.ioc`'s Clock Configuration tab should still be checked to confirm `APB1 Timer clocks = 84 MHz` before relying on this.
+
+**Validation result:** TBD — pending real-hardware testing.
 
 ---
 
