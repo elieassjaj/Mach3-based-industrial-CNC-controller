@@ -114,8 +114,22 @@ Mach3-based-industrial-CNC-controller/
 │   ├── PINOUT.md
 │   └── SYSTEM-ARCHITECTURE.md
 │
-├── Firmware/
-│   └── STM32CubeIDE firmware project
+├── Firmware/                       STM32CubeIDE project (CNC5AX-ETH)
+│   ├── CNC5AX-ETH.ioc              CubeMX configuration
+│   ├── Core/
+│   │   ├── Inc/                    main.h, gpio.h, dma.h, tim.h, HAL/IT headers
+│   │   ├── Src/                    main.c, gpio.c, dma.c, tim.c, stm32f4xx_it.c, ...
+│   │   └── Startup/                startup_stm32f407vgtx.s
+│   ├── Drivers/
+│   │   ├── CMSIS/
+│   │   └── STM32F4xx_HAL_Driver/
+│   ├── LWIP/
+│   │   ├── App/                    lwip.c, lwip.h
+│   │   └── Target/                 ethernetif.c, lwipopts.h
+│   ├── Middlewares/Third_Party/LwIP/
+│   ├── STM32F407VGTX_FLASH.ld
+│   ├── STM32F407VGTX_RAM.ld
+│   └── .project, .cproject, .mxproject, .settings/
 │
 ├── LAN8720A/
 │   ├── LAN8720
@@ -136,10 +150,11 @@ Mach3-based-industrial-CNC-controller/
 │   ├── application_note/
 │   └── stm32_github_reference/
 │
+├── .gitignore
 └── README.md
 ```
 
-`Firmware/` is the implementation area for the STM32CubeIDE project. The final source/module structure must remain consistent with the architecture defined in `Docs/FIRMWARE-ARCHITECTURE.md`.
+`Firmware/` is the implementation area for the STM32CubeIDE project. The final source/module structure must remain consistent with the architecture defined in `Docs/FIRMWARE-ARCHITECTURE.md`. Its current state is described under [Firmware Project State](#firmware-project-state).
 
 ---
 
@@ -164,6 +179,44 @@ Mach3-based-industrial-CNC-controller/
 6. `Docs/ETHERNET.md`
 7. `MACH3/SDK-README.MD`
 8. `STM32_DOCs/` whenever a decision depends on exact STM32 behavior
+
+---
+
+## Firmware Project State
+
+`Firmware/` contains an STM32CubeIDE project (`CNC5AX-ETH.ioc`, CubeMX 6.15.0, STM32Cube FW_F4 V1.28.0, target `STM32F407VGT6`/LQFP100) that is currently **peripheral initialization only**. It consists of CubeMX-generated startup, clock, GPIO, DMA, timer, EXTI/NVIC and LwIP scaffolding. No motion, protocol, or application logic has been written: `main()`'s `while (1)` loop is empty and the `USER CODE` sections are unmodified.
+
+### What the generated configuration establishes
+
+| Area | Configured state |
+|---|---|
+| Clock | 8 MHz HSE crystal → PLL (M=4, N=168, P=2) → 168 MHz SYSCLK; APB1 42 MHz (84 MHz timer clock), APB2 84 MHz (168 MHz timer clock); `FLASH_LATENCY_5`, voltage scale 1 |
+| Debug | SWD only (`PA13`/`PA14`); JTAG not used, which is what frees `PB4` for spindle PWM |
+| STEP | `PA8`–`PA12` = X, Y, Z, A, B — GPIO output push-pull, very-high speed, driven LOW at init |
+| DIR / enable | `PD8`–`PD12` (DIR X–B), `PD15` (`MOTOR_EN`) — GPIO output push-pull, very-high speed, driven LOW at init |
+| STEP base timer | TIM2, PSC = 0, ARR = 20 → 4.000 MHz update rate (250 ns tick); TIM2 global interrupt deliberately not enabled |
+| STEP DMA | `DMA1_Stream1` / Channel 3 on the `TIM2_UP` request — memory-to-peripheral, 32-bit both sides, circular, very-high priority, peripheral increment disabled |
+| Spindle PWM | TIM3 CH1 on `PB4` (AF2), PSC = 83, ARR = 99 → 10.000 kHz, 0 % duty at init |
+| Digital inputs | `PE0`–`PE14` (15 pins) as EXTI, rising **and** falling edge, `GPIO_NOPULL` |
+| E-STOP | `PE2`, dedicated `EXTI2_IRQn` vector, pre-emption priority 0 |
+| NVIC | Priority group 4; EXTI2 = 0, other EXTI = 1, `DMA1_Stream1` = 2, ETH = 5, SysTick = 15 |
+| Ethernet | ETH peripheral in RMII mode on the nine pins listed in `Docs/PINOUT.md`; `PB0` configured as a plain GPIO output labelled `PHY_NRST` |
+| LwIP | v2.1.2, `NO_SYS = 1`, RAW API only (`LWIP_NETCONN` / `LWIP_SOCKET` = 0), hardware checksum offload; ETH DMA descriptors placed in normal RAM (not CCM) |
+| Outputs | `PB8` relay, `PB2` run LED, `PB1` error LED — GPIO output push-pull |
+
+These values match ADR-002, ADR-004 and ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.md`.
+
+### Known open items in the generated project
+
+Listed so they are not mistaken for working functionality:
+
+- **LwIP is configured for DHCP**, while `Docs/ETHERNET.md` §15 specifies a static IPv4 address. `MX_LWIP_Init()` calls `dhcp_start()` and `LWIP_AUTOIP` is 0, so on the intended direct controller-to-PC link (no DHCP server) the interface would never obtain an address.
+- **`PHY_NRST` (`PB0`) is driven LOW at init and never released**, which holds the LAN8720A in reset.
+- **No PHY driver is present**, and `ethernet_link_check_state()` is an empty stub — link state is never detected and the MAC is never configured from a negotiated speed/duplex.
+- **`MX_LWIP_Process()` is never called**, so no packets would be processed even once the link works.
+- **The 15 `PE0`–`PE14` inputs are `GPIO_NOPULL`.** They are specified as active-low, so they rely on external pull-ups; if the board does not provide them, internal pull-ups must be enabled.
+- TIM2 and TIM3 are initialized but never started; there is no STEP BSRR buffer, no DMA start, no motion engine, no UDP protocol layer and no Mach3 integration yet.
+- MAC address, IP/port values, `MOTOR_EN` polarity, watchdog, heap/stack sizes and LwIP memory sizing are still at CubeMX defaults or undefined.
 
 ---
 
@@ -338,11 +391,14 @@ This repository is intended to be developed with AI assistance. The following ru
 | Firmware architecture | Documented |
 | Motion engine requirements | Documented |
 | Ethernet/LwIP architecture | Documented |
-| `Firmware/` STM32CubeIDE project | In preparation / implementation in progress |
-| STEP-DMA base timer & DMA allocation | TIM2, single DMA1 Stream1/Channel3, all 5 axes on GPIOA (`PA8`–`PA12`) — confirmed against RM0090 (ADR-002, ADR-004, ADR-005) |
-| Firmware execution model | Bare-metal, interrupt-driven superloop (ADR-003) |
+| `Firmware/` STM32CubeIDE project | Present — peripheral initialization only (see [Firmware Project State](#firmware-project-state)) |
+| STEP-DMA base timer & DMA allocation | TIM2, single DMA1 Stream1/Channel3, all 5 axes on GPIOA (`PA8`–`PA12`) — confirmed against RM0090 (ADR-002, ADR-004, ADR-005) and matched by the generated code |
+| Firmware execution model | Bare-metal, interrupt-driven superloop (ADR-003) — superloop body not yet written |
 | STM32 Datasheet / RM0090 / Errata PDFs | Uploaded and verified |
-| CubeMX `.ioc` peripheral configuration | In progress — clock tree, GPIO, EXTI, TIM3 spindle PWM, Ethernet RMII, LwIP done; TIM2/DMA/NVIC pending |
+| CubeMX `.ioc` peripheral configuration | Clock, GPIO, EXTI/NVIC, TIM2 + DMA, TIM3 spindle PWM, Ethernet RMII and LwIP configured |
+| Ethernet bring-up | Not functional yet — PHY held in reset, no PHY driver, LwIP set to DHCP instead of the documented static IP |
+| Motion engine / STEP generation code | Not started — no BSRR buffer, no DMA start, timers not started |
+| Mach3 host-side plugin | Not started |
 | Final UDP application protocol | TBD |
 | Verified 3-axis @ 2 MHz performance | Not yet validated |
 | Production-ready firmware | Not yet complete |
