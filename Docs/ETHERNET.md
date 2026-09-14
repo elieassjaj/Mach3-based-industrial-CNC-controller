@@ -1346,7 +1346,7 @@ The following items must be explicitly verified before being treated as implemen
 | Host Integration | `[TBD]` Mach / LinuxCNC / custom host |
 | Network Update Rate | `[TBD]` |
 | Motion Timing | `[PROJECT-DECISION]` Must remain deterministic |
-| CoreXY | `[PROJECT-DECISION]` |
+| CoreXY | `no` |
 | Feedback Protocol | `[TBD]` |
 
 ---
