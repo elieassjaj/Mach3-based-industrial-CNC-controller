@@ -34,7 +34,10 @@ All five STEP pins are on the **same GPIO port (GPIOA)**, in sequential order, s
 
 ## EN pin (GPIOD)
 
-* **EN_PIN:** `PD15` (`GPIO_PIN_15`)
+* **EN_PIN:** `PD15` (`GPIO_PIN_15`) — drive enable for the axis drivers.
+* **Polarity: ACTIVE HIGH.** `HIGH` = drivers enabled, `LOW` = drivers disabled.
+* Consequence for start-up safety: the reset/initial state of `PD15` must be `LOW`, so the drivers stay disabled until the firmware has completed initialization and reached a known-safe state (`Docs/FIRMWARE-ARCHITECTURE.md` §32). The generated `MX_GPIO_Init()` already drives `PD15` LOW before configuring it as an output, which satisfies this.
+* The same applies to any fault or emergency-stop response: de-asserting (`LOW`) disables the drivers.
 
 ---
 
@@ -53,7 +56,8 @@ All five STEP pins are on the **same GPIO port (GPIOA)**, in sequential order, s
 * **Inputs:** `PE0–PE14`
 * **E-STOP:** `PE2`
 * **E-STOP** must have the highest appropriate interrupt priority and immediately trigger the emergency-stop handling.
-* The interrupt trigger edge (`Rising`, `Falling`, or `Both`) must be selected according to the final hardware design.
+* **Pull resistors: external pull-ups are fitted on the board for all 15 inputs.** Internal pull-ups must therefore **not** be enabled in firmware; `GPIO_NOPULL` is the correct and intended configuration. An input reads `HIGH` when idle and is pulled `LOW` when asserted.
+* **Interrupt trigger edge:** both edges (`GPIO_MODE_IT_RISING_FALLING`). Because the inputs are active-low, the falling edge is the assertion of the signal and the rising edge is its release; both are captured so the firmware can track the current state of each input rather than only its assertion.
 
 ---
 
@@ -96,7 +100,11 @@ The following Ethernet signals use fixed hardware routing between the STM32F407V
 * Communication between the MCU and PHY uses **RMII**.
 * The Ethernet pins listed above are **fixed hardware connections** and must not be reassigned in firmware unless the hardware design is changed. PA1 = ETH_RMII_REF_CLK (INPUT, sourced from onboard 50MHz oscillator on the PHY board, not MCU MCO). 
 
-* The exact RMII reference-clock source/configuration is defined by the Ethernet hardware design and must be kept consistent with the LAN8720A configuration.
+* **RMII reference clock — verified against `LAN8720A/LAN8720-ETH-Board-Schematic.pdf`:** the PHY board carries its own **50 MHz oscillator**, whose output feeds both the LAN8720A's `XTAL1/CLKIN` input and the module header pin that connects to the MCU's `PA1`. The MCU therefore **receives** the 50 MHz RMII reference clock and must **not** generate it. No `MCO`/`MCO2` output is required or configured, and `PA1` is an input. Any example code that configures MCO to drive the PHY (including the ST STM3210C-EVAL demo shipped as the LAN8720A example) does **not** apply to this hardware.
+
+* **PHY reset:** the module's `nRST` line has a 4.7 kΩ pull-up on the PHY board and is brought out to the header; it is driven by `PB0` (`PHY_NRST`) on the MCU. `nRST` is **active low**, so the firmware must drive `PB0` HIGH to release the PHY from reset before any MDIO access or Ethernet initialization.
+
+* **PHY SMI (MDIO) address:** the LAN8720A's address is hardware-strapped by the `RXER/PHYAD0` pin to either 0 or 1 (datasheet §3.7.1, strap default `0b`). The vendor-supplied example for this module uses address `1`. Because the two sources disagree, the firmware should not hard-code an address — it should scan the SMI address range and detect the PHY, which is also what ST's PHY driver does.
 
 ---
 

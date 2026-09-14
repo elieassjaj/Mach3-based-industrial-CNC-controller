@@ -66,6 +66,29 @@ STM32F407VGT6
    └── Integrated Ethernet MAC
 ```
 
+## 2.2 PHY Driver Selection (LAN8720A vs LAN8742)
+
+[DESIGN-RECOMMENDATION]
+
+STM32CubeMX's LwIP *Platform Settings* does not offer a LAN8720 driver; within the same Microchip family only **LAN8742** is available. The LAN8742 driver can be used for the LAN8720A, because the registers ST's driver actually touches are the standard IEEE 802.3 MII management registers plus one vendor register whose relevant fields are defined identically on both parts:
+
+| Register | Used for | LAN8720A |
+|---|---|---|
+| `0x00` BCR | soft reset, auto-negotiation enable/restart | Standard |
+| `0x01` BSR | link status, auto-negotiation complete | Standard |
+| `0x02`/`0x03` PHY ID | device identification | Standard |
+| `0x12` Special Modes | holds the strapped `PHYAD` address bits | Present |
+| `0x1F` PHY Special Control/Status | speed/duplex result after auto-negotiation | Present — bits `[4:2]` *Speed Indication*: `001` = 10 half, `101` = 10 full, `010` = 100 half, `110` = 100 full; bit `12` = *Autodone*. Verified against `LAN8720A/LAN8720A_DataSheet-DS00002165.pdf` §"PHY Special Control/Status Register". |
+
+The LAN8742 driver reads exactly these fields, so selecting LAN8742 in CubeMX and using it against the LAN8720A is functionally correct for link-up, speed and duplex detection.
+
+Two points must still be handled explicitly:
+
+1. **PHY address.** The LAN8720A strap allows only 0 or 1 and the available sources disagree on which this module uses, so the address must be detected by scanning rather than hard-coded.
+2. **Reset release.** The driver performs MDIO reads; these fail while the PHY is held in reset, so `PB0` (`PHY_NRST`, active-low) must be driven HIGH and the PHY given its reset-release time **before** the driver is initialized.
+
+If the LAN8742 driver is ever found to diverge from the LAN8720A in a way that matters, the fallback is a small project-owned PHY driver using the same five registers above; this is a contained piece of work, not an architectural change.
+
 ### Clock Architecture
 
 [HW-CONFIRMED / TBD]
@@ -90,9 +113,19 @@ MCU HSE Clock
 RMII 50 MHz Reference Clock
 ```
 
-[TBD]
+[HW-CONFIRMED]
 
-The exact LAN8720A RMII clock mode and the source/direction of the 50 MHz RMII reference clock must be verified against the final schematic and LAN8720A configuration.
+The source and direction of the 50 MHz RMII reference clock have been verified against `LAN8720A/LAN8720-ETH-Board-Schematic.pdf`: the PHY module carries its own **50 MHz oscillator**, whose output drives both the LAN8720A's `XTAL1/CLKIN` pin and the header pin wired to the MCU's `PA1`.
+
+```text
+PHY board 50 MHz oscillator
+        │
+        ├──────────────► LAN8720A  XTAL1/CLKIN
+        │
+        └──────────────► STM32F407  PA1 (ETH_RMII_REF_CLK, input)
+```
+
+The MCU therefore consumes the RMII reference clock and does not produce it: `PA1` is an input and no `MCO`/`MCO2` output is configured. This is independent of the 8 MHz HSE crystal, which only feeds the MCU's own PLL.
 
 ---
 
@@ -856,23 +889,27 @@ Synchronization between axes should be handled by the motion-control subsystem r
 
 ## 20.5 Hardware Timer Interface
 
-[PROJECT-DECISION / TBD]
+[PROJECT-DECISION]
 
-Each axis requires a deterministic STEP pulse-generation mechanism.
-
-The final firmware should map each axis to its assigned hardware timer/channel or other validated pulse-generation mechanism.
+All five axes share **one** deterministic STEP pulse-generation mechanism. There is no per-axis timer or per-axis DMA stream: a single base timer (`TIM2`) Update event triggers a single DMA stream (`DMA1_Stream1`) that writes one 32-bit word to `GPIOA->BSRR`, and that one word carries the STEP bits of all five axes at once.
 
 ```text
-Axis 1 ──► Timer + DMA + BSRR  ──► STEP 1
-Axis 2 ──► Timer + DMA + BSRR  ──► STEP 2
-Axis 3 ──► Timer + DMA + BSRR  ──► STEP 3
-Axis 4 ──► Timer + DMA + BSRR  ──► STEP 4
-Axis 5 ──► Timer + DMA + BSRR  ──► STEP 5
+                         Motion Engine
+                              │
+                              ▼
+                   STEP event / BSRR buffer
+                              │
+         TIM2 Update ───► DMA1_Stream1 ───► GPIOA->BSRR
+                              │
+        ┌───────┬─────────────┼─────────────┬───────┐
+        ▼       ▼             ▼             ▼       ▼
+      PA8     PA9           PA10          PA11    PA12
+     STEP X  STEP Y        STEP Z        STEP A  STEP B
 ```
 
-[TBD]
+Per-axis step rates are produced by which bits the motion engine sets in each successive BSRR word, not by giving each axis its own timer or channel. Because all five axes are updated by the same write, they change state with no timing skew relative to one another.
 
-The exact timer/channel assignment must be taken from the project's authoritative pinout and firmware configuration.
+The authoritative definitions are `Docs/PINOUT.md` (pins), `Docs/MOTION-ENGINE.md` Sections 9–11 (architecture), and ADR-001/ADR-002/ADR-004/ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.md` (timer, DMA, base tick, NVIC, pin consolidation).
 
 ---
 
@@ -1304,9 +1341,12 @@ The following items must be explicitly verified before being treated as implemen
 
 | Item | Status |
 |---|---|
-| LAN8720A RMII clock mode | `[TBD]` |
-| RMII 50 MHz clock source | `[TBD]` |
-| Exact Ethernet pin configuration | `[HW-CONFIRMED / TBD]` |
+| LAN8720A RMII clock mode | `[HW-CONFIRMED]` RMII; PHY clocked from the module's own 50 MHz oscillator |
+| RMII 50 MHz clock source | `[HW-CONFIRMED]` On-board 50 MHz oscillator on the PHY module, feeding both the PHY's `XTAL1/CLKIN` and the MCU's `PA1`. The MCU does not generate it; no MCO is configured. Verified against `LAN8720A/LAN8720-ETH-Board-Schematic.pdf`. |
+| Exact Ethernet pin configuration | `[HW-CONFIRMED]` Nine RMII signals per `Docs/PINOUT.md`, matched by the generated `.ioc` |
+| PHY SMI (MDIO) address | `[TBD]` Strapped to 0 or 1 by `RXER/PHYAD0`; datasheet default is 0, the vendor example uses 1 — detect by scanning rather than hard-coding |
+| PHY driver | `[TBD]` STM32CubeMX offers no LAN8720 driver; the LAN8742 driver is register-compatible for the operations required (see §2.2) |
+| PHY reset release (`PB0`) | `[TBD]` Not yet implemented in firmware; `nRST` is active-low and must be driven HIGH before MDIO/Ethernet init |
 | LwIP version | `[TBD]` |
 | RAW API usage in final firmware | `[TBD]` |
 | Static IP values | `[TBD]` |

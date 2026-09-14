@@ -110,6 +110,7 @@ Mach3-based-industrial-CNC-controller/
 ├── Docs/
 │   ├── ETHERNET.md
 │   ├── FIRMWARE-ARCHITECTURE.md
+│   ├── MACH3-INTERFACE.md
 │   ├── MOTION-ENGINE.md
 │   ├── PINOUT.md
 │   └── SYSTEM-ARCHITECTURE.md
@@ -167,6 +168,7 @@ Mach3-based-industrial-CNC-controller/
 | [`Docs/FIRMWARE-ARCHITECTURE.md`](Docs/FIRMWARE-ARCHITECTURE.md) | Firmware subsystem boundaries, priorities, real-time rules, safety and AI-development constraints |
 | [`Docs/MOTION-ENGINE.md`](Docs/MOTION-ENGINE.md) | STEP/DIR timing requirements, multi-axis behavior, buffering and acceptance criteria |
 | [`Docs/ETHERNET.md`](Docs/ETHERNET.md) | LAN8720A/RMII, Ethernet MAC/DMA, LwIP and UDP architecture |
+| [`Docs/MACH3-INTERFACE.md`](Docs/MACH3-INTERFACE.md) | How Mach3 drives an external motion device, established from the SDK |
 | [`MACH3/SDK-README.MD`](MACH3/SDK-README.MD) | Rules and guidance for Mach3 SDK integration |
 
 ### Recommended Reading Order
@@ -177,8 +179,9 @@ Mach3-based-industrial-CNC-controller/
 4. `Docs/FIRMWARE-ARCHITECTURE.md`
 5. `Docs/MOTION-ENGINE.md`
 6. `Docs/ETHERNET.md`
-7. `MACH3/SDK-README.MD`
-8. `STM32_DOCs/` whenever a decision depends on exact STM32 behavior
+7. `Docs/MACH3-INTERFACE.md`
+8. `MACH3/SDK-README.MD`
+9. `STM32_DOCs/` whenever a decision depends on exact STM32 behavior
 
 ---
 
@@ -193,11 +196,11 @@ Mach3-based-industrial-CNC-controller/
 | Clock | 8 MHz HSE crystal → PLL (M=4, N=168, P=2) → 168 MHz SYSCLK; APB1 42 MHz (84 MHz timer clock), APB2 84 MHz (168 MHz timer clock); `FLASH_LATENCY_5`, voltage scale 1 |
 | Debug | SWD only (`PA13`/`PA14`); JTAG not used, which is what frees `PB4` for spindle PWM |
 | STEP | `PA8`–`PA12` = X, Y, Z, A, B — GPIO output push-pull, very-high speed, driven LOW at init |
-| DIR / enable | `PD8`–`PD12` (DIR X–B), `PD15` (`MOTOR_EN`) — GPIO output push-pull, very-high speed, driven LOW at init |
+| DIR / enable | `PD8`–`PD12` (DIR X–B), `PD15` (`MOTOR_EN`) — GPIO output push-pull, very-high speed, driven LOW at init. `MOTOR_EN` is **active high**, so LOW at init means the drives are disabled until firmware enables them |
 | STEP base timer | TIM2, PSC = 0, ARR = 20 → 4.000 MHz update rate (250 ns tick); TIM2 global interrupt deliberately not enabled |
 | STEP DMA | `DMA1_Stream1` / Channel 3 on the `TIM2_UP` request — memory-to-peripheral, 32-bit both sides, circular, very-high priority, peripheral increment disabled |
 | Spindle PWM | TIM3 CH1 on `PB4` (AF2), PSC = 83, ARR = 99 → 10.000 kHz, 0 % duty at init |
-| Digital inputs | `PE0`–`PE14` (15 pins) as EXTI, rising **and** falling edge, `GPIO_NOPULL` |
+| Digital inputs | `PE0`–`PE14` (15 pins) as EXTI, rising **and** falling edge, `GPIO_NOPULL` — correct, the board provides external pull-ups |
 | E-STOP | `PE2`, dedicated `EXTI2_IRQn` vector, pre-emption priority 0 |
 | NVIC | Priority group 4; EXTI2 = 0, other EXTI = 1, `DMA1_Stream1` = 2, ETH = 5, SysTick = 15 |
 | Ethernet | ETH peripheral in RMII mode on the nine pins listed in `Docs/PINOUT.md`; `PB0` configured as a plain GPIO output labelled `PHY_NRST` |
@@ -214,9 +217,8 @@ Listed so they are not mistaken for working functionality:
 - **`PHY_NRST` (`PB0`) is driven LOW at init and never released**, which holds the LAN8720A in reset.
 - **No PHY driver is present**, and `ethernet_link_check_state()` is an empty stub — link state is never detected and the MAC is never configured from a negotiated speed/duplex.
 - **`MX_LWIP_Process()` is never called**, so no packets would be processed even once the link works.
-- **The 15 `PE0`–`PE14` inputs are `GPIO_NOPULL`.** They are specified as active-low, so they rely on external pull-ups; if the board does not provide them, internal pull-ups must be enabled.
 - TIM2 and TIM3 are initialized but never started; there is no STEP BSRR buffer, no DMA start, no motion engine, no UDP protocol layer and no Mach3 integration yet.
-- MAC address, IP/port values, `MOTOR_EN` polarity, watchdog, heap/stack sizes and LwIP memory sizing are still at CubeMX defaults or undefined.
+- MAC address, IP/port values, watchdog, heap/stack sizes and LwIP memory sizing are still at CubeMX defaults or undefined.
 
 ---
 
