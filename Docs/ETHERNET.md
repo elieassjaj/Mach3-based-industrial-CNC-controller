@@ -844,7 +844,7 @@ Conceptually:
                   │             │
                   └──────┬──────┘
                          ▼
-                  Hardware Timers
+                  Hardware Timer + DMA + BSRR
                          │
                          ▼
                      STEP / DIR
@@ -863,11 +863,11 @@ Each axis requires a deterministic STEP pulse-generation mechanism.
 The final firmware should map each axis to its assigned hardware timer/channel or other validated pulse-generation mechanism.
 
 ```text
-Axis 1 ──► Timer / PWM Channel ──► STEP 1
-Axis 2 ──► Timer / PWM Channel ──► STEP 2
-Axis 3 ──► Timer / PWM Channel ──► STEP 3
-Axis 4 ──► Timer / PWM Channel ──► STEP 4
-Axis 5 ──► Timer / PWM Channel ──► STEP 5
+Axis 1 ──► Timer + DMA + BSRR  ──► STEP 1
+Axis 2 ──► Timer + DMA + BSRR  ──► STEP 2
+Axis 3 ──► Timer + DMA + BSRR  ──► STEP 3
+Axis 4 ──► Timer + DMA + BSRR  ──► STEP 4
+Axis 5 ──► Timer + DMA + BSRR  ──► STEP 5
 ```
 
 [TBD]
@@ -917,7 +917,7 @@ Motion Buffer / Planner
 Axis Control
       │
       ▼
-Hardware Timers
+Hardware Timer + DMA + BSRR
       │
       ▼
 Deterministic STEP/DIR
