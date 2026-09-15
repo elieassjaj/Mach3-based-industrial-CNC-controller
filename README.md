@@ -206,6 +206,7 @@ Mach3-based-industrial-CNC-controller/
 | Ethernet | ETH peripheral in RMII mode on the nine pins listed in `Docs/PINOUT.md`; `PB0` (`PHY_NRST`) driven HIGH at init to release the LAN8720A from reset, internal pull-up enabled as a backup to the board's own 4.7 kΩ pull-up |
 | PHY driver | LAN8742 (CubeMX's closest available option — see `Docs/ETHERNET.md` §2.2), auto-scans SMI address 0–31, decodes link/speed/duplex from register `0x1F` and applies it to the MAC via `HAL_ETH_SetMACConfig()` |
 | LwIP | v2.1.2, `NO_SYS = 1`, RAW API only (`LWIP_NETCONN` / `LWIP_SOCKET` = 0), hardware checksum offload; ETH DMA descriptors placed in normal RAM (not CCM); `MX_LWIP_Process()` now called each superloop iteration |
+| IP configuration | Static — controller `192.168.5.10`, PC `192.168.5.100`, mask `255.255.255.0`, no gateway (`LWIP_DHCP = 0`) — see `Docs/ETHERNET.md` §15 |
 | Outputs | `PB8` relay, `PB2` run LED, `PB1` error LED — GPIO output push-pull |
 
 These values match ADR-002, ADR-004 and ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.md`.
@@ -214,7 +215,6 @@ These values match ADR-002, ADR-004 and ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.m
 
 Listed so they are not mistaken for working functionality:
 
-- **LwIP is configured for DHCP**, while `Docs/ETHERNET.md` §15 specifies a static IPv4 address. `MX_LWIP_Init()` calls `dhcp_start()` and `LWIP_AUTOIP` is 0, so on the intended direct controller-to-PC link (no DHCP server) the interface would never obtain an address. **Still open.**
 - **`PB0`/`PHY_NRST` is only ever held HIGH from firmware boot — it is never pulsed.** Functionally this releases the PHY as required, but the LAN8720A datasheet's power-on timing (§5.6.3) specifies the external reset should stay asserted for at least 25 ms after supplies stabilize; this design relies entirely on the PHY's own internal power-on reset plus the board's pull-up for that, since the MCU never drives the pin low. Works in practice (the driver also issues an MDIO soft-reset during `LAN8742_Init()`), but explicitly pulsing `PB0` low for ≥100 µs at the start of `low_level_init()` before releasing it would make cold-boot behavior deterministic rather than dependent on the PHY's internal POR. Recommended hardening, not a blocker.
 - TIM2 and TIM3 are initialized but never started; there is no STEP BSRR buffer, no DMA start, no motion engine, no UDP protocol layer and no Mach3 integration yet.
 - MAC address, IP/port values, watchdog, heap/stack sizes and LwIP memory sizing are still at CubeMX defaults or undefined.
@@ -398,7 +398,7 @@ This repository is intended to be developed with AI assistance. The following ru
 | Firmware execution model | Bare-metal, interrupt-driven superloop (ADR-003) — superloop body not yet written |
 | STM32 Datasheet / RM0090 / Errata PDFs | Uploaded and verified |
 | CubeMX `.ioc` peripheral configuration | Clock, GPIO, EXTI/NVIC, TIM2 + DMA, TIM3 spindle PWM, Ethernet RMII and LwIP configured |
-| Ethernet bring-up | Not functional yet — PHY held in reset, no PHY driver, LwIP set to DHCP instead of the documented static IP |
+| Ethernet bring-up | PHY release, LAN8742-compatible driver, static IP and `MX_LWIP_Process()` all in place; untested on real hardware |
 | Motion engine / STEP generation code | Not started — no BSRR buffer, no DMA start, timers not started |
 | Mach3 host-side plugin | Not started |
 | Final UDP application protocol | TBD |

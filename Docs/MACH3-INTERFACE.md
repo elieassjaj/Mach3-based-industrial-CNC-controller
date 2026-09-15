@@ -137,7 +137,8 @@ Mach3 plugins use MFC's `CAsyncSocket`. The SDK's `CUDPSocket` wrapper creates a
 |---|---|
 | Repository location for the PC-side Mach3 plugin | `[TBD]` — no directory reserved yet |
 | Our UDP packet format (header, opcode, sequence, payload, CRC) | `[TBD]` |
-| UDP port number and static IP values | `[TBD]` |
+| Static IP values | `[FW-CONFIRMED]` Controller `192.168.5.10`, PC `192.168.5.100` — `Docs/ETHERNET.md` §15 |
+| UDP port number | `[TBD]` |
 | Slice duration and block size for our own protocol | `[TBD]` — reference design uses 2–4 ms slices, 32 per block |
 | Device→host status packet contents and rate | `[TBD]` |
 | Mapping of Mach3's 6 axes onto this controller's 5 | `[TBD]` |

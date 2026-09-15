@@ -40,6 +40,25 @@
 #include "lwip/tcpip.h"
 #endif /* WITH_RTOS */
 
+/* IP addresses initialization without DHCP (IPv4) */
+/* CNC5AX-ETH static address, direct point-to-point link to the Mach3 PC - see Docs/ETHERNET.md Section 15 */
+#define IP_ADDR0   ((uint8_t) 192U)
+#define IP_ADDR1   ((uint8_t) 168U)
+#define IP_ADDR2   ((uint8_t) 5U)
+#define IP_ADDR3   ((uint8_t) 10U)
+
+/*NETMASK*/
+#define NETMASK_ADDR0   ((uint8_t) 255U)
+#define NETMASK_ADDR1   ((uint8_t) 255U)
+#define NETMASK_ADDR2   ((uint8_t) 255U)
+#define NETMASK_ADDR3   ((uint8_t) 0U)
+
+/*Gateway Address*/
+#define GW_ADDR0   ((uint8_t) 0U)
+#define GW_ADDR1   ((uint8_t) 0U)
+#define GW_ADDR2   ((uint8_t) 0U)
+#define GW_ADDR3   ((uint8_t) 0U)
+
 /* USER CODE BEGIN 0 */
 
 /* USER CODE END 0 */

@@ -581,68 +581,49 @@ The function name must not be considered a project API unless it exists in the a
 
 # 15. IP Configuration
 
-[PROJECT-DECISION]
+[FW-CONFIRMED]
 
-The intended controller network configuration uses a static IPv4 address.
+The controller network configuration is a **static IPv4 address**, no DHCP, no AUTOIP. This is implemented in `Firmware/LWIP/App/lwip.h` (address octet `#define`s) and `Firmware/LWIP/App/lwip.c` (`MX_LWIP_Init()` calls `IP4_ADDR()` directly instead of `dhcp_start()`), with `LWIP_DHCP` set to `0` in `Firmware/LWIP/Target/lwipopts.h`.
 
-Typical parameters are:
-
-```text
-MAC Address
-IP Address
-Subnet Mask
-Gateway
-UDP Port
-```
-
-[TBD]
-
-The actual values must be taken from the final firmware configuration.
-
-For a direct controller-to-PC connection, both devices must use compatible network addressing.
-
-[EXAMPLE]
+**Final values:**
 
 ```text
-Controller:
-IP Address : 192.168.1.10
-Subnet     : 255.255.255.0
+Controller (CNC5AX-ETH):
+  IP Address : 192.168.5.10
+  Subnet     : 255.255.255.0
+  Gateway    : 0.0.0.0   (none — isolated point-to-point link, no router)
 
-Host PC:
-IP Address : 192.168.1.100
-Subnet     : 255.255.255.0
+Host PC (Mach3):
+  IP Address : 192.168.5.100
+  Subnet     : 255.255.255.0
 ```
 
-These values are examples only.
+**Reasoning for the `192.168.5.0/24` subnet:** this is a dedicated, isolated point-to-point link between the controller and one PC NIC — not a shared LAN — so any private (RFC1918) subnet works electrically. `192.168.5.0/24` was chosen specifically to avoid the two most common home/office router defaults, `192.168.0.0/24` and `192.168.1.0/24`; if the Mach3 PC's other network adapter (e.g. for internet access) happens to sit on one of those, a shared subnet on the wrong interface could cause routing ambiguity. A distinct third octet avoids that regardless of how the PC's other NICs are configured.
 
-They are not protocol requirements.
+**Gateway = `0.0.0.0`:** there is no router on this link and nothing outside the `/24` needs to be reached, so no default gateway is configured. This is standard for an isolated point-to-point industrial link.
+
+**MAC address:** still `[TBD]` — currently the CubeMX-generated placeholder (`00:80:E1:00:00:00`) in `ethernetif.c`. A real, non-conflicting locally-administered MAC must be chosen before this ships on any network the placeholder could collide on; harmless on a single isolated point-to-point link but should not be left as the CubeMX default in a production build.
+
+**UDP port:** still `[TBD]` — depends on the application protocol design, not on the IP layer. Tracked in `Docs/MACH3-INTERFACE.md` §7.
+
+The PC-side IP address (`192.168.5.100`) must be configured in Windows' network adapter settings for whichever NIC is physically connected to the controller; this is a host-side/plugin concern, not something the firmware can set.
 
 ---
 
 # 16. Network Configuration Source
 
-[TBD]
+[FW-CONFIRMED]
 
-The final project must identify the authoritative source of network configuration.
-
-Possible locations include:
+The authoritative source of network configuration is:
 
 ```text
-lwipopts.h
-ethernetif.c
-main.c
-application configuration
-CubeMX-generated configuration
-project-specific network configuration
+Firmware/LWIP/App/lwip.h       — IP_ADDR0..3, NETMASK_ADDR0..3, GW_ADDR0..3
+Firmware/LWIP/App/lwip.c       — MX_LWIP_Init(), applies the above via IP4_ADDR()
+Firmware/LWIP/Target/lwipopts.h — LWIP_DHCP (0)
+Firmware/LWIP/Target/ethernetif.c — MACAddr[] in low_level_init()
 ```
 
-The final documentation should explicitly identify the file containing:
-
-- controller IP
-- subnet mask
-- gateway
-- MAC address
-- UDP port
+UDP port and any application-protocol configuration will live in the protocol layer once it exists (not yet implemented — see `Docs/MACH3-INTERFACE.md`).
 
 AI-generated firmware must use the actual project configuration rather than inventing new macro names.
 
@@ -1349,9 +1330,9 @@ The following items must be explicitly verified before being treated as implemen
 | PHY SMI (MDIO) address | `[FW-CONFIRMED]` Strapped to 0 or 1 in hardware by `RXER/PHYAD0`; the LAN8742 driver's `LAN8742_Init()` scans addresses 0–31 and does not assume a fixed value, so the hardware ambiguity does not matter |
 | PHY driver | `[FW-CONFIRMED]` LAN8742 (CubeMX offers no LAN8720 driver); register usage verified compatible — see §2.2 |
 | PHY reset release (`PB0`) | `[FW-CONFIRMED]` `PB0` is driven HIGH in `MX_GPIO_Init()`, before `MX_LWIP_Init()` runs, releasing `nRST`. It is held HIGH permanently rather than pulsed — see the power-on timing note in §2.2. |
-| LwIP version | `[TBD]` |
-| RAW API usage in final firmware | `[TBD]` |
-| Static IP values | `[TBD]` |
+| LwIP version | `[FW-CONFIRMED]` v2.1.2_Cube |
+| RAW API usage in final firmware | `[FW-CONFIRMED]` `NO_SYS=1`, `LWIP_NETCONN=0`, `LWIP_SOCKET=0` in `lwipopts.h` |
+| Static IP values | `[FW-CONFIRMED]` Controller `192.168.5.10`, PC `192.168.5.100`, mask `255.255.255.0`, no gateway — see Section 15 |
 | UDP port | `[TBD]` |
 | UDP packet format | `[TBD]` |
 | Host-side Mach integration | `[TBD]` |
@@ -1381,8 +1362,8 @@ The following items must be explicitly verified before being treated as implemen
 | MCU HSE | `[HW-CONFIRMED]` 8 MHz external crystal |
 | Network Stack | `[PROJECT-DECISION]` LwIP |
 | Transport | `[PROJECT-DECISION]` UDP |
-| LwIP API | `[TBD]` RAW API intended |
-| IP Configuration | `[PROJECT-DECISION]` Static IPv4 intended |
+| LwIP API | `[FW-CONFIRMED]` RAW API |
+| IP Configuration | `[FW-CONFIRMED]` Static IPv4 — `192.168.5.10` / `255.255.255.0`, no gateway |
 | Ethernet Transfer | `[HW-CONFIRMED]` DMA capable |
 | Motion Protocol | `[TBD]` UDP-based application protocol |
 | Host Integration | `[TBD]` Mach / LinuxCNC / custom host |
