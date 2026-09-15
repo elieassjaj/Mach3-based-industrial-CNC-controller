@@ -203,8 +203,9 @@ Mach3-based-industrial-CNC-controller/
 | Digital inputs | `PE0`–`PE14` (15 pins) as EXTI, rising **and** falling edge, `GPIO_NOPULL` — correct, the board provides external pull-ups |
 | E-STOP | `PE2`, dedicated `EXTI2_IRQn` vector, pre-emption priority 0 |
 | NVIC | Priority group 4; EXTI2 = 0, other EXTI = 1, `DMA1_Stream1` = 2, ETH = 5, SysTick = 15 |
-| Ethernet | ETH peripheral in RMII mode on the nine pins listed in `Docs/PINOUT.md`; `PB0` configured as a plain GPIO output labelled `PHY_NRST` |
-| LwIP | v2.1.2, `NO_SYS = 1`, RAW API only (`LWIP_NETCONN` / `LWIP_SOCKET` = 0), hardware checksum offload; ETH DMA descriptors placed in normal RAM (not CCM) |
+| Ethernet | ETH peripheral in RMII mode on the nine pins listed in `Docs/PINOUT.md`; `PB0` (`PHY_NRST`) driven HIGH at init to release the LAN8720A from reset, internal pull-up enabled as a backup to the board's own 4.7 kΩ pull-up |
+| PHY driver | LAN8742 (CubeMX's closest available option — see `Docs/ETHERNET.md` §2.2), auto-scans SMI address 0–31, decodes link/speed/duplex from register `0x1F` and applies it to the MAC via `HAL_ETH_SetMACConfig()` |
+| LwIP | v2.1.2, `NO_SYS = 1`, RAW API only (`LWIP_NETCONN` / `LWIP_SOCKET` = 0), hardware checksum offload; ETH DMA descriptors placed in normal RAM (not CCM); `MX_LWIP_Process()` now called each superloop iteration |
 | Outputs | `PB8` relay, `PB2` run LED, `PB1` error LED — GPIO output push-pull |
 
 These values match ADR-002, ADR-004 and ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.md`.
@@ -213,12 +214,11 @@ These values match ADR-002, ADR-004 and ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.m
 
 Listed so they are not mistaken for working functionality:
 
-- **LwIP is configured for DHCP**, while `Docs/ETHERNET.md` §15 specifies a static IPv4 address. `MX_LWIP_Init()` calls `dhcp_start()` and `LWIP_AUTOIP` is 0, so on the intended direct controller-to-PC link (no DHCP server) the interface would never obtain an address.
-- **`PHY_NRST` (`PB0`) is driven LOW at init and never released**, which holds the LAN8720A in reset.
-- **No PHY driver is present**, and `ethernet_link_check_state()` is an empty stub — link state is never detected and the MAC is never configured from a negotiated speed/duplex.
-- **`MX_LWIP_Process()` is never called**, so no packets would be processed even once the link works.
+- **LwIP is configured for DHCP**, while `Docs/ETHERNET.md` §15 specifies a static IPv4 address. `MX_LWIP_Init()` calls `dhcp_start()` and `LWIP_AUTOIP` is 0, so on the intended direct controller-to-PC link (no DHCP server) the interface would never obtain an address. **Still open.**
+- **`PB0`/`PHY_NRST` is only ever held HIGH from firmware boot — it is never pulsed.** Functionally this releases the PHY as required, but the LAN8720A datasheet's power-on timing (§5.6.3) specifies the external reset should stay asserted for at least 25 ms after supplies stabilize; this design relies entirely on the PHY's own internal power-on reset plus the board's pull-up for that, since the MCU never drives the pin low. Works in practice (the driver also issues an MDIO soft-reset during `LAN8742_Init()`), but explicitly pulsing `PB0` low for ≥100 µs at the start of `low_level_init()` before releasing it would make cold-boot behavior deterministic rather than dependent on the PHY's internal POR. Recommended hardening, not a blocker.
 - TIM2 and TIM3 are initialized but never started; there is no STEP BSRR buffer, no DMA start, no motion engine, no UDP protocol layer and no Mach3 integration yet.
 - MAC address, IP/port values, watchdog, heap/stack sizes and LwIP memory sizing are still at CubeMX defaults or undefined.
+- PHY SMI address is auto-scanned by the LAN8742 driver rather than assumed, which resolves the address-strap ambiguity noted in `Docs/ETHERNET.md`.
 
 ---
 

@@ -85,7 +85,9 @@ The LAN8742 driver reads exactly these fields, so selecting LAN8742 in CubeMX an
 Two points must still be handled explicitly:
 
 1. **PHY address.** The LAN8720A strap allows only 0 or 1 and the available sources disagree on which this module uses, so the address must be detected by scanning rather than hard-coded.
-2. **Reset release.** The driver performs MDIO reads; these fail while the PHY is held in reset, so `PB0` (`PHY_NRST`, active-low) must be driven HIGH and the PHY given its reset-release time **before** the driver is initialized.
+2. **Reset release.** The driver performs MDIO reads; these fail while the PHY is held in reset, so `PB0` (`PHY_NRST`, active-low) must be driven HIGH and the PHY given its reset-release time **before** the driver is initialized. `[FW-CONFIRMED]` `MX_GPIO_Init()` now drives `PB0` HIGH (with its internal pull-up also enabled, backing up the board's own 4.7 kΩ pull-up on `nRST`), and this runs before `MX_LWIP_Init()`.
+
+   `[DESIGN-RECOMMENDATION]` `PB0` is currently only ever held HIGH — the firmware never actively pulses it LOW. The LAN8720A datasheet's power-on timing (§5.6.3, `tpurstd`) specifies external `nRST` should remain asserted for at least 25 ms after supplies reach 80% of nominal before being released. This board has no RC delay or reset supervisor on `nRST` (a plain pull-up per the schematic), so meeting that spec at cold power-up currently depends entirely on the LAN8720A's own internal power-on reset. `LAN8742_Init()` does also perform an MDIO soft-reset (`BCR` bit 15) independent of the pin, which is what makes this work in practice. For deterministic behavior independent of the PHY's internal POR, consider explicitly driving `PB0` LOW for ≥100 µs (`trstia`, the general reset-assertion minimum) at the start of `low_level_init()` before releasing it — a small, contained firmware change, not an architectural one.
 
 If the LAN8742 driver is ever found to diverge from the LAN8720A in a way that matters, the fallback is a small project-owned PHY driver using the same five registers above; this is a contained piece of work, not an architectural change.
 
@@ -1344,9 +1346,9 @@ The following items must be explicitly verified before being treated as implemen
 | LAN8720A RMII clock mode | `[HW-CONFIRMED]` RMII; PHY clocked from the module's own 50 MHz oscillator |
 | RMII 50 MHz clock source | `[HW-CONFIRMED]` On-board 50 MHz oscillator on the PHY module, feeding both the PHY's `XTAL1/CLKIN` and the MCU's `PA1`. The MCU does not generate it; no MCO is configured. Verified against `LAN8720A/LAN8720-ETH-Board-Schematic.pdf`. |
 | Exact Ethernet pin configuration | `[HW-CONFIRMED]` Nine RMII signals per `Docs/PINOUT.md`, matched by the generated `.ioc` |
-| PHY SMI (MDIO) address | `[TBD]` Strapped to 0 or 1 by `RXER/PHYAD0`; datasheet default is 0, the vendor example uses 1 — detect by scanning rather than hard-coding |
-| PHY driver | `[TBD]` STM32CubeMX offers no LAN8720 driver; the LAN8742 driver is register-compatible for the operations required (see §2.2) |
-| PHY reset release (`PB0`) | `[TBD]` Not yet implemented in firmware; `nRST` is active-low and must be driven HIGH before MDIO/Ethernet init |
+| PHY SMI (MDIO) address | `[FW-CONFIRMED]` Strapped to 0 or 1 in hardware by `RXER/PHYAD0`; the LAN8742 driver's `LAN8742_Init()` scans addresses 0–31 and does not assume a fixed value, so the hardware ambiguity does not matter |
+| PHY driver | `[FW-CONFIRMED]` LAN8742 (CubeMX offers no LAN8720 driver); register usage verified compatible — see §2.2 |
+| PHY reset release (`PB0`) | `[FW-CONFIRMED]` `PB0` is driven HIGH in `MX_GPIO_Init()`, before `MX_LWIP_Init()` runs, releasing `nRST`. It is held HIGH permanently rather than pulsed — see the power-on timing note in §2.2. |
 | LwIP version | `[TBD]` |
 | RAW API usage in final firmware | `[TBD]` |
 | Static IP values | `[TBD]` |
