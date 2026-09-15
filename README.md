@@ -114,6 +114,7 @@ Mach3-based-industrial-CNC-controller/
 │   ├── MACH3-INTERFACE.md
 │   ├── MOTION-ENGINE.md
 │   ├── PINOUT.md
+│   ├── PRE-IMPLEMENTATION-DECISIONS.md
 │   └── SYSTEM-ARCHITECTURE.md
 │
 ├── Firmware/                       STM32CubeIDE project (CNC5AX-ETH)
@@ -171,6 +172,7 @@ Mach3-based-industrial-CNC-controller/
 | [`Docs/ETHERNET.md`](Docs/ETHERNET.md) | LAN8720A/RMII, Ethernet MAC/DMA, LwIP and UDP architecture |
 | [`Docs/MACH3-INTERFACE.md`](Docs/MACH3-INTERFACE.md) | How Mach3 drives an external motion device, established from the SDK |
 | [`Docs/FIRMWARE-IMPLEMENTATION-PLAN.md`](Docs/FIRMWARE-IMPLEMENTATION-PLAN.md) | Firmware module breakdown, protocol dependencies, frozen-assumption list, implementation/verification order |
+| [`Docs/PRE-IMPLEMENTATION-DECISIONS.md`](Docs/PRE-IMPLEMENTATION-DECISIONS.md) | Per-item decision list: requirement, what was undecided, dependents, resolution or explicit open question |
 | [`MACH3/SDK-README.MD`](MACH3/SDK-README.MD) | Rules and guidance for Mach3 SDK integration |
 
 ### Recommended Reading Order
@@ -183,8 +185,9 @@ Mach3-based-industrial-CNC-controller/
 6. `Docs/ETHERNET.md`
 7. `Docs/MACH3-INTERFACE.md`
 8. `Docs/FIRMWARE-IMPLEMENTATION-PLAN.md`
-9. `MACH3/SDK-README.MD`
-10. `STM32_DOCs/` whenever a decision depends on exact STM32 behavior
+9. `Docs/PRE-IMPLEMENTATION-DECISIONS.md`
+10. `MACH3/SDK-README.MD`
+11. `STM32_DOCs/` whenever a decision depends on exact STM32 behavior
 
 ---
 

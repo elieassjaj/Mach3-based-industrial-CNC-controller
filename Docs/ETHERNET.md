@@ -602,7 +602,7 @@ Host PC (Mach3):
 
 **Gateway = `0.0.0.0`:** there is no router on this link and nothing outside the `/24` needs to be reached, so no default gateway is configured. This is standard for an isolated point-to-point industrial link.
 
-**MAC address:** still `[TBD]` — currently the CubeMX-generated placeholder (`00:80:E1:00:00:00`) in `ethernetif.c`. A real, non-conflicting locally-administered MAC must be chosen before this ships on any network the placeholder could collide on; harmless on a single isolated point-to-point link but should not be left as the CubeMX default in a production build.
+**MAC address:** bench-test value decided, production strategy still open — see ADR-011 in `Docs/FIRMWARE-ARCHITECTURE.md` §41. The current CubeMX placeholder (`00:80:E1:00:00:00`) in `ethernetif.c` is a real vendor's OUI and must be replaced with a locally-administered address before any hardware bring-up, even bench testing. The final production MAC-sourcing strategy (fixed vs. derived per-unit from the STM32's factory unique ID vs. a purchased OUI block) is a project-owner decision, not resolvable from this repository alone.
 
 **UDP port:** still `[TBD]` — depends on the application protocol design, not on the IP layer. Tracked in `Docs/MACH3-INTERFACE.md` §7.
 
