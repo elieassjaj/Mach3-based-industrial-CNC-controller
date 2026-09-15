@@ -61,18 +61,18 @@ M4/M5/M7/M9/M10/M3/M12 have **no** dependency on the protocol — they can be fu
 
 These are not protocol questions — they're implementation choices the documents deliberately left open (per FIRMWARE-ARCHITECTURE Rule 6/ADR pattern) that nonetheless must be picked *once*, consistently, before the modules that depend on them can be written without contradicting each other.
 
-**Status: items 1–5 and the bench-test half of item 7 are now resolved** (ADR-006 through ADR-011 in `Docs/FIRMWARE-ARCHITECTURE.md` §41 — see `Docs/PRE-IMPLEMENTATION-DECISIONS.md` for the full reasoning behind each). Items 6, the production half of item 7, and two specific policy choices inside item 5's fault model remain genuinely open and require the project owner's decision.
+**Status: items 1–7 are now fully resolved** (ADR-006 through ADR-011 in `Docs/FIRMWARE-ARCHITECTURE.md` §41 — see `Docs/PRE-IMPLEMENTATION-DECISIONS.md` for the full reasoning behind each, including which parts came from repository evidence versus an explicit project-owner decision). Only item 8 remains an open, low-stakes choice.
 
 1. ~~DIR generation method~~ — **Resolved, ADR-006**: CPU-timed `GPIOD` writes with a one-tick (250 ns) guard interval; the DMA-hardware alternative remains the documented fallback.
 2. ~~Interpolation/DDA algorithm~~ — **Resolved, ADR-007**: per-axis DDA/Bresenham accumulator at the 4 MHz tick, operating entirely in step-domain; all engineering-unit conversion happens on the PC-side plugin, matching the SDK's own `ncPod` reference behavior.
 3. ~~Motion buffer depth and unit~~ — **Resolved (target, not final bytes), ADR-008**: two independent buffers (STEP-DMA refill buffer, size TBD pending hardware measurement; motion command buffer targeting ≥128 ms per the `ncPod` evidence), statically allocated; underflow → controlled halt + `FAULT`, overflow → explicit backpressure, never silent overwrite.
 4. ~~Position/step-count representation~~ — **Resolved, ADR-009**: `int64_t`, raw step counts, matching the SDK's own `GMoves.DDA1/2/3` field width.
-5. ~~System/fault state model~~ — **Resolved (structure), ADR-010**: `BOOT → INIT → SAFE_IDLE → READY ⇄ RUNNING`, with `FAULT` and `EMERGENCY_STOP` as distinct terminal-until-cleared states. **Still open, needs your decision:** whether any fault condition should ever auto-clear instead of requiring an explicit reset action (ADR-010 defaults to "never," as the conservative choice, but flags this as a policy call, not a documentable fact).
-6. **Relay polarity** — **still unresolved, by design.** `Docs/PINOUT.md` now explicitly flags this as requiring hardware verification rather than a documentation gap to fill in. No default is proposed; this cannot be inferred from anything in the repository.
-7. **MAC address** — **bench-test half resolved, ADR-011**: a locally-administered address for development. **Production half still open, needs your decision:** fixed address vs. per-unit-derived (e.g. from the STM32's factory unique ID) vs. a purchased OUI block — a product/business decision, not a technical one this repository can resolve.
+5. ~~System/fault state model~~ — **Fully resolved, ADR-010**: `BOOT → INIT → SAFE_IDLE → READY ⇄ RUNNING`, `FAULT`/`EMERGENCY_STOP` distinct and always requiring explicit clear (confirmed, never auto-clear). One refinement from the project owner: `COMM_TIMEOUT`/buffer-underflow `FAULT`s hold position with `EN` still asserted rather than disabling drives — the one exception to the general "faults disable drives" rule, chosen to avoid de-energizing a stepper/servo under load merely because the link paused.
+6. ~~Relay polarity~~ — **Resolved, verified against hardware by the project owner: ACTIVE HIGH.** `Docs/PINOUT.md` updated accordingly.
+7. ~~MAC address~~ — **Fully resolved, ADR-011**: locally-administered address for bench testing; per-unit, STM32-unique-ID-derived address for production (confirmed by the project owner — no purchase, no collision risk).
 8. **`PB0`/PHY reset hardening** — still an open, low-stakes decision: add the explicit ≥100 µs low-pulse now, or defer it. Either is acceptable; it just needs to be a decision before M12 is finalized.
 
-Items 1–5 and 7(bench) no longer block M4–M9/M12 from being coded once the still-open pieces above (6, 7-production, 5's auto-clear question, 8) are each either answered or explicitly deferred.
+Items 1–7 no longer block M4–M9/M12 from being coded.
 
 ---
 

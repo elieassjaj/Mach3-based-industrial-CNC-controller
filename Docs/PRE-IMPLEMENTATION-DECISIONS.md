@@ -58,9 +58,10 @@ Full reasoning, alternatives considered, and risk notes for every resolved item 
   any state → EMERGENCY_STOP (PE2 EXTI, latching — kept structurally distinct from FAULT so a generic fault-clear can never clear an E-stop)
   ```
   Entering `FAULT` or `EMERGENCY_STOP` deasserts `EN` immediately and halts the STEP-DMA. Communication timeout is a `FAULT`, not an `EMERGENCY_STOP` — the local E-stop path must stay independent of the network (§8), so a dead link is not itself a safety event; it is handled identically to a buffer underflow (item 3). The 14 non-E-STOP inputs are reported raw by firmware; assigning "this input means stop" semantics is host/Mach3-signal-table work (`Docs/MACH3-INTERFACE.md` §4), not firmware policy, unless a future revision of this repository decides otherwise.
-- **Needs your decision — two specific, genuine policy calls, not derivable from the repository:**
-  1. **Fault recovery policy.** ADR-010 defaults to "no automatic recovery — `FAULT` and `EMERGENCY_STOP` require an explicit clear/reset action, ever," as the conservative choice. Should any condition (e.g. communication resuming after a timeout) be allowed to auto-clear instead of requiring the operator/host to explicitly acknowledge it?
-  2. **Comm-timeout drive behavior.** ADR-010 deasserts `EN` (fully disables drives) on any `FAULT`, including comm timeout, rather than merely halting new STEP output while holding position with drives still enabled. Nothing in the repository documents whether the connected drives are open-loop steppers or step/dir-command servos (no ADC/DAC/encoder pins are used anywhere per `README.md`'s Hardware Platform table, which points toward open-loop steppers, but this is an inference, not a documented fact) — please confirm the drive type and whether "hold energized, stop stepping" vs. "fully disable" is the intended behavior on comm loss.
+- **Decided by the project owner:**
+  1. **Fault recovery policy — confirmed: always explicit, never automatic.** No condition (including communication resuming after a timeout) clears a `FAULT` or `EMERGENCY_STOP` on its own; every recovery requires an explicit clear/reset action.
+  2. **Comm-timeout / buffer-underflow drive behavior — confirmed: hold position, keep drives enabled.** `EN` stays asserted; only new STEP output halts. This is the **one exception** to the general rule that `FAULT`/`EMERGENCY_STOP` deassert `EN` — chosen specifically so a paused network link or an emptied buffer never de-energizes a stepper (or step/dir servo) and lets an axis drift or drop under load. Hardware-integrity faults (DMA/timer fault, corrupt packet stream, init failure) still fully disable drives, since those indicate the system cannot trust its own step generation, unlike a merely-paused command stream.
+- **Needs your decision:** no — both resolved. See ADR-010 for the full, updated behavior table.
 
 ---
 
@@ -69,8 +70,8 @@ Full reasoning, alternatives considered, and risk notes for every resolved item 
 - **Documented requirement:** none. `Docs/PINOUT.md` defines `RELAY_PIN: PB8` with no stated polarity — the only output pin in that document without one (STEP, DIR, `EN`, and spindle all state active-high/active-low explicitly).
 - **What is undecided:** whether driving `PB8` HIGH energizes or de-energizes the relay.
 - **Depends on this:** M9 (Outputs) directly; indirectly M1 (safe boot-time output level) and M2 (safe fault-time output level).
-- **No default proposed.** This is a hardware fact, not a design choice, and no schematic for the relay driver stage exists in this repository — `LAN8720A/LAN8720-ETH-Board-Schematic.pdf` covers only the Ethernet PHY module. Guessing risks the relay being energized exactly when firmware intends it off, including at boot and during a fault.
-- **Needs your decision: yes.** Please check the actual relay driver circuit (or the physical board) and report which level of `PB8` energizes the relay. `Docs/PINOUT.md` now carries an explicit `[TBD — HARDWARE VERIFICATION REQUIRED]` flag on this pin so it cannot be mistaken for an oversight.
+- **Resolved by the project owner, verified against hardware: ACTIVE HIGH** (`HIGH` = energized, `LOW` = de-energized). No default was proposed for this item — it was a hardware fact requiring verification, not a design choice, and no schematic for the relay driver stage exists in this repository (`LAN8720A/LAN8720-ETH-Board-Schematic.pdf` covers only the Ethernet PHY module). `Docs/PINOUT.md` is updated accordingly; `PB8` must default `LOW` at boot and in any `FAULT`/`EMERGENCY_STOP` state.
+- **Needs your decision:** no — resolved.
 
 ---
 
@@ -80,7 +81,8 @@ Full reasoning, alternatives considered, and risk notes for every resolved item 
 - **What was undecided:** what address to use, and whether that answer differs between bench testing and a shipped product.
 - **Depends on this:** M12 (Ethernet).
 - **Resolved for bench testing — ADR-011:** a locally-administered unicast address (U/L bit set), e.g. `02:00:05:10:00:01` — chosen only as a memorable convention echoing the static IP (`192.168.5.10`), with no other significance. This replaces the current CubeMX placeholder `00:80:E1:00:00:00`, which is a real vendor's OUI prefix and must not be used even for bench testing on an isolated link.
-- **Needs your decision — production strategy:** a single hardcoded address (fine for one unit, a collision risk if this project is ever built in quantity and multiple units share a network), an address derived per-unit from the STM32F407's factory-programmed 96-bit unique ID (each unit distinct, no purchase required, but still locally-administered rather than a "real" registered address), or a purchased IEEE OUI block (real registered address, has a cost, only worth it at production volume). This is a product/business decision this repository cannot resolve on its own.
+- **Resolved for production — ADR-011, confirmed by the project owner:** per-unit, derived from the STM32F407's factory-programmed 96-bit unique device ID. Every unit gets a distinct, automatically-generated, locally-administered address — no purchase, no per-unit provisioning step, no collision risk across units. The exact byte-derivation scheme is an M12 implementation detail, not fixed here.
+- **Needs your decision:** no — both halves resolved.
 
 ---
 
