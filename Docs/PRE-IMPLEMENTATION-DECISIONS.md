@@ -11,7 +11,7 @@ Full reasoning, alternatives considered, and risk notes for every resolved item 
 - **Documented requirement:** DIR active-high (`Docs/PINOUT.md`); ≥200 ns setup and ≥200 ns hold around the relevant STEP edge (`Docs/MOTION-ENGINE.md` §7).
 - **What was undecided:** whether DIR needs its own DMA/timer-hardware path or can use CPU-timed writes (`Docs/MOTION-ENGINE.md` §24, explicitly `TBD`).
 - **Depends on this:** M4 (StepGen), M5 (Interpolation, which must enforce the scheduling guard), M7 (DIR).
-- **Resolved — ADR-006:** CPU-timed `GPIOD` writes, with the Motion Engine required to schedule at least one base tick (250 ns) between a direction change and the next/previous STEP edge for that axis. One tick already exceeds the 200 ns requirement. A DMA-hardware path (the DMA1_Stream7/Channel3 slot ADR-005 freed) remains the documented fallback if hardware measurement later shows this insufficient.
+- **Resolved — ADR-006 (refined by a later quantitative timing verification):** CPU-timed `GPIOD` writes, synchronized to STEP-DMA buffer segment boundaries rather than to an arbitrary single tick — because the STEP buffer is filled ahead of real-time playback, a DIR write must wait until no old-direction edge remains queued in the currently-playing segment. The real achieved lead time is one buffer-refill period (ADR-008), which is 100–1,000× the 200 ns requirement — the original "one tick exceeds 200 ns" arithmetic was a valid but incomplete lower-bound description of the actual mechanism. A DMA-hardware path (the DMA1_Stream7/Channel3 slot ADR-005 freed) remains the documented fallback if a motion profile ever needs reversals faster than one buffer-refill period.
 - **Needs your decision:** no.
 
 ---
