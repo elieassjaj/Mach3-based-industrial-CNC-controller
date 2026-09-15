@@ -53,7 +53,10 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, PHY_NRST_Pin|LED_ERR_Pin|LED_RUN_Pin|RELAY1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(PHY_NRST_GPIO_Port, PHY_NRST_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, LED_ERR_Pin|LED_RUN_Pin|RELAY1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, DIR_X_Pin|DIR_Y_Pin|DIR_Z_Pin|DIR_A_Pin
@@ -75,8 +78,15 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PHY_NRST_Pin LED_ERR_Pin LED_RUN_Pin RELAY1_Pin */
-  GPIO_InitStruct.Pin = PHY_NRST_Pin|LED_ERR_Pin|LED_RUN_Pin|RELAY1_Pin;
+  /*Configure GPIO pin : PHY_NRST_Pin */
+  GPIO_InitStruct.Pin = PHY_NRST_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(PHY_NRST_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : LED_ERR_Pin LED_RUN_Pin RELAY1_Pin */
+  GPIO_InitStruct.Pin = LED_ERR_Pin|LED_RUN_Pin|RELAY1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
