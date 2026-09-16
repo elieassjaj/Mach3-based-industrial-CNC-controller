@@ -36,6 +36,9 @@ static void Ethernet_Link_Periodic_Handle(struct netif *netif);
 /* ETH Variables initialization ----------------------------------------------*/
 void Error_Handler(void);
 
+/* DHCP Variables initialization ---------------------------------------------*/
+uint32_t DHCPfineTimer = 0;
+uint32_t DHCPcoarseTimer = 0;
 /* USER CODE BEGIN 1 */
 
 /* USER CODE END 1 */
@@ -59,10 +62,10 @@ void MX_LWIP_Init(void)
   /* Initialize the LwIP stack without RTOS */
   lwip_init();
 
-  /* IP addresses initialization without DHCP (IPv4) */
-  IP4_ADDR(&ipaddr, IP_ADDR0, IP_ADDR1, IP_ADDR2, IP_ADDR3);
-  IP4_ADDR(&netmask, NETMASK_ADDR0, NETMASK_ADDR1, NETMASK_ADDR2, NETMASK_ADDR3);
-  IP4_ADDR(&gw, GW_ADDR0, GW_ADDR1, GW_ADDR2, GW_ADDR3);
+  /* IP addresses initialization with DHCP (IPv4) */
+  ipaddr.addr = 0;
+  netmask.addr = 0;
+  gw.addr = 0;
 
   /* add the network interface (IPv4/IPv6) without RTOS */
   netif_add(&gnetif, &ipaddr, &netmask, &gw, NULL, &ethernetif_init, &ethernet_input);
@@ -75,6 +78,9 @@ void MX_LWIP_Init(void)
 
   /* Set the link callback function, this function is called on change of link status*/
   netif_set_link_callback(&gnetif, ethernet_link_status_updated);
+
+  /* Start DHCP negotiation for a network interface (IPv4) */
+  dhcp_start(&gnetif);
 
 /* USER CODE BEGIN 3 */
 
