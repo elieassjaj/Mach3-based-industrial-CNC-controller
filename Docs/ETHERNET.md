@@ -66,6 +66,31 @@ STM32F407VGT6
    └── Integrated Ethernet MAC
 ```
 
+## 2.2 PHY Driver Selection (LAN8720A vs LAN8742)
+
+[DESIGN-RECOMMENDATION]
+
+STM32CubeMX's LwIP *Platform Settings* does not offer a LAN8720 driver; within the same Microchip family only **LAN8742** is available. The LAN8742 driver can be used for the LAN8720A, because the registers ST's driver actually touches are the standard IEEE 802.3 MII management registers plus one vendor register whose relevant fields are defined identically on both parts:
+
+| Register | Used for | LAN8720A |
+|---|---|---|
+| `0x00` BCR | soft reset, auto-negotiation enable/restart | Standard |
+| `0x01` BSR | link status, auto-negotiation complete | Standard |
+| `0x02`/`0x03` PHY ID | device identification | Standard |
+| `0x12` Special Modes | holds the strapped `PHYAD` address bits | Present |
+| `0x1F` PHY Special Control/Status | speed/duplex result after auto-negotiation | Present — bits `[4:2]` *Speed Indication*: `001` = 10 half, `101` = 10 full, `010` = 100 half, `110` = 100 full; bit `12` = *Autodone*. Verified against `LAN8720A/LAN8720A_DataSheet-DS00002165.pdf` §"PHY Special Control/Status Register". |
+
+The LAN8742 driver reads exactly these fields, so selecting LAN8742 in CubeMX and using it against the LAN8720A is functionally correct for link-up, speed and duplex detection.
+
+Two points must still be handled explicitly:
+
+1. **PHY address.** The LAN8720A strap allows only 0 or 1 and the available sources disagree on which this module uses, so the address must be detected by scanning rather than hard-coded.
+2. **Reset release.** The driver performs MDIO reads; these fail while the PHY is held in reset, so `PB0` (`PHY_NRST`, active-low) must be driven HIGH and the PHY given its reset-release time **before** the driver is initialized. `[FW-CONFIRMED]` `MX_GPIO_Init()` now drives `PB0` HIGH (with its internal pull-up also enabled, backing up the board's own 4.7 kΩ pull-up on `nRST`), and this runs before `MX_LWIP_Init()`.
+
+   `[DESIGN-RECOMMENDATION]` `PB0` is currently only ever held HIGH — the firmware never actively pulses it LOW. The LAN8720A datasheet's power-on timing (§5.6.3, `tpurstd`) specifies external `nRST` should remain asserted for at least 25 ms after supplies reach 80% of nominal before being released. This board has no RC delay or reset supervisor on `nRST` (a plain pull-up per the schematic), so meeting that spec at cold power-up currently depends entirely on the LAN8720A's own internal power-on reset. `LAN8742_Init()` does also perform an MDIO soft-reset (`BCR` bit 15) independent of the pin, which is what makes this work in practice. For deterministic behavior independent of the PHY's internal POR, consider explicitly driving `PB0` LOW for ≥100 µs (`trstia`, the general reset-assertion minimum) at the start of `low_level_init()` before releasing it — a small, contained firmware change, not an architectural one.
+
+If the LAN8742 driver is ever found to diverge from the LAN8720A in a way that matters, the fallback is a small project-owned PHY driver using the same five registers above; this is a contained piece of work, not an architectural change.
+
 ### Clock Architecture
 
 [HW-CONFIRMED / TBD]
@@ -90,9 +115,19 @@ MCU HSE Clock
 RMII 50 MHz Reference Clock
 ```
 
-[TBD]
+[HW-CONFIRMED]
 
-The exact LAN8720A RMII clock mode and the source/direction of the 50 MHz RMII reference clock must be verified against the final schematic and LAN8720A configuration.
+The source and direction of the 50 MHz RMII reference clock have been verified against `LAN8720A/LAN8720-ETH-Board-Schematic.pdf`: the PHY module carries its own **50 MHz oscillator**, whose output drives both the LAN8720A's `XTAL1/CLKIN` pin and the header pin wired to the MCU's `PA1`.
+
+```text
+PHY board 50 MHz oscillator
+        │
+        ├──────────────► LAN8720A  XTAL1/CLKIN
+        │
+        └──────────────► STM32F407  PA1 (ETH_RMII_REF_CLK, input)
+```
+
+The MCU therefore consumes the RMII reference clock and does not produce it: `PA1` is an input and no `MCO`/`MCO2` output is configured. This is independent of the 8 MHz HSE crystal, which only feeds the MCU's own PLL.
 
 ---
 
@@ -546,68 +581,49 @@ The function name must not be considered a project API unless it exists in the a
 
 # 15. IP Configuration
 
-[PROJECT-DECISION]
+[FW-CONFIRMED]
 
-The intended controller network configuration uses a static IPv4 address.
+The controller network configuration is a **static IPv4 address**, no DHCP, no AUTOIP. This is implemented in `Firmware/LWIP/App/lwip.h` (address octet `#define`s) and `Firmware/LWIP/App/lwip.c` (`MX_LWIP_Init()` calls `IP4_ADDR()` directly instead of `dhcp_start()`), with `LWIP_DHCP` set to `0` in `Firmware/LWIP/Target/lwipopts.h`.
 
-Typical parameters are:
-
-```text
-MAC Address
-IP Address
-Subnet Mask
-Gateway
-UDP Port
-```
-
-[TBD]
-
-The actual values must be taken from the final firmware configuration.
-
-For a direct controller-to-PC connection, both devices must use compatible network addressing.
-
-[EXAMPLE]
+**Final values:**
 
 ```text
-Controller:
-IP Address : 192.168.1.10
-Subnet     : 255.255.255.0
+Controller (CNC5AX-ETH):
+  IP Address : 192.168.5.10
+  Subnet     : 255.255.255.0
+  Gateway    : 0.0.0.0   (none — isolated point-to-point link, no router)
 
-Host PC:
-IP Address : 192.168.1.100
-Subnet     : 255.255.255.0
+Host PC (Mach3):
+  IP Address : 192.168.5.100
+  Subnet     : 255.255.255.0
 ```
 
-These values are examples only.
+**Reasoning for the `192.168.5.0/24` subnet:** this is a dedicated, isolated point-to-point link between the controller and one PC NIC — not a shared LAN — so any private (RFC1918) subnet works electrically. `192.168.5.0/24` was chosen specifically to avoid the two most common home/office router defaults, `192.168.0.0/24` and `192.168.1.0/24`; if the Mach3 PC's other network adapter (e.g. for internet access) happens to sit on one of those, a shared subnet on the wrong interface could cause routing ambiguity. A distinct third octet avoids that regardless of how the PC's other NICs are configured.
 
-They are not protocol requirements.
+**Gateway = `0.0.0.0`:** there is no router on this link and nothing outside the `/24` needs to be reached, so no default gateway is configured. This is standard for an isolated point-to-point industrial link.
+
+**MAC address:** fully resolved — see ADR-011 in `Docs/FIRMWARE-ARCHITECTURE.md` §41. Bench testing uses a locally-administered address, replacing the CubeMX placeholder (`00:80:E1:00:00:00` in `ethernetif.c`, a real vendor's OUI that was never this project's to use). Production units derive their address per-unit from the STM32F407's factory-programmed 96-bit unique device ID (confirmed by the project owner) — no purchase, no fixed shared address, no collision risk across units.
+
+**UDP port:** still `[TBD]` — depends on the application protocol design, not on the IP layer. Tracked in `Docs/MACH3-INTERFACE.md` §7.
+
+The PC-side IP address (`192.168.5.100`) must be configured in Windows' network adapter settings for whichever NIC is physically connected to the controller; this is a host-side/plugin concern, not something the firmware can set.
 
 ---
 
 # 16. Network Configuration Source
 
-[TBD]
+[FW-CONFIRMED]
 
-The final project must identify the authoritative source of network configuration.
-
-Possible locations include:
+The authoritative source of network configuration is:
 
 ```text
-lwipopts.h
-ethernetif.c
-main.c
-application configuration
-CubeMX-generated configuration
-project-specific network configuration
+Firmware/LWIP/App/lwip.h       — IP_ADDR0..3, NETMASK_ADDR0..3, GW_ADDR0..3
+Firmware/LWIP/App/lwip.c       — MX_LWIP_Init(), applies the above via IP4_ADDR()
+Firmware/LWIP/Target/lwipopts.h — LWIP_DHCP (0)
+Firmware/LWIP/Target/ethernetif.c — MACAddr[] in low_level_init()
 ```
 
-The final documentation should explicitly identify the file containing:
-
-- controller IP
-- subnet mask
-- gateway
-- MAC address
-- UDP port
+UDP port and any application-protocol configuration will live in the protocol layer once it exists (not yet implemented — see `Docs/MACH3-INTERFACE.md`).
 
 AI-generated firmware must use the actual project configuration rather than inventing new macro names.
 
@@ -844,7 +860,7 @@ Conceptually:
                   │             │
                   └──────┬──────┘
                          ▼
-                  Hardware Timers
+                  Hardware Timer + DMA + BSRR
                          │
                          ▼
                      STEP / DIR
@@ -856,23 +872,27 @@ Synchronization between axes should be handled by the motion-control subsystem r
 
 ## 20.5 Hardware Timer Interface
 
-[PROJECT-DECISION / TBD]
+[PROJECT-DECISION]
 
-Each axis requires a deterministic STEP pulse-generation mechanism.
-
-The final firmware should map each axis to its assigned hardware timer/channel or other validated pulse-generation mechanism.
+All five axes share **one** deterministic STEP pulse-generation mechanism. There is no per-axis timer or per-axis DMA stream: a single base timer (`TIM2`) Update event triggers a single DMA stream (`DMA1_Stream1`) that writes one 32-bit word to `GPIOA->BSRR`, and that one word carries the STEP bits of all five axes at once.
 
 ```text
-Axis 1 ──► Timer / PWM Channel ──► STEP 1
-Axis 2 ──► Timer / PWM Channel ──► STEP 2
-Axis 3 ──► Timer / PWM Channel ──► STEP 3
-Axis 4 ──► Timer / PWM Channel ──► STEP 4
-Axis 5 ──► Timer / PWM Channel ──► STEP 5
+                         Motion Engine
+                              │
+                              ▼
+                   STEP event / BSRR buffer
+                              │
+         TIM2 Update ───► DMA1_Stream1 ───► GPIOA->BSRR
+                              │
+        ┌───────┬─────────────┼─────────────┬───────┐
+        ▼       ▼             ▼             ▼       ▼
+      PA8     PA9           PA10          PA11    PA12
+     STEP X  STEP Y        STEP Z        STEP A  STEP B
 ```
 
-[TBD]
+Per-axis step rates are produced by which bits the motion engine sets in each successive BSRR word, not by giving each axis its own timer or channel. Because all five axes are updated by the same write, they change state with no timing skew relative to one another.
 
-The exact timer/channel assignment must be taken from the project's authoritative pinout and firmware configuration.
+The authoritative definitions are `Docs/PINOUT.md` (pins), `Docs/MOTION-ENGINE.md` Sections 9–11 (architecture), and ADR-001/ADR-002/ADR-004/ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.md` (timer, DMA, base tick, NVIC, pin consolidation).
 
 ---
 
@@ -917,7 +937,7 @@ Motion Buffer / Planner
 Axis Control
       │
       ▼
-Hardware Timers
+Hardware Timer + DMA + BSRR
       │
       ▼
 Deterministic STEP/DIR
@@ -1304,12 +1324,15 @@ The following items must be explicitly verified before being treated as implemen
 
 | Item | Status |
 |---|---|
-| LAN8720A RMII clock mode | `[TBD]` |
-| RMII 50 MHz clock source | `[TBD]` |
-| Exact Ethernet pin configuration | `[HW-CONFIRMED / TBD]` |
-| LwIP version | `[TBD]` |
-| RAW API usage in final firmware | `[TBD]` |
-| Static IP values | `[TBD]` |
+| LAN8720A RMII clock mode | `[HW-CONFIRMED]` RMII; PHY clocked from the module's own 50 MHz oscillator |
+| RMII 50 MHz clock source | `[HW-CONFIRMED]` On-board 50 MHz oscillator on the PHY module, feeding both the PHY's `XTAL1/CLKIN` and the MCU's `PA1`. The MCU does not generate it; no MCO is configured. Verified against `LAN8720A/LAN8720-ETH-Board-Schematic.pdf`. |
+| Exact Ethernet pin configuration | `[HW-CONFIRMED]` Nine RMII signals per `Docs/PINOUT.md`, matched by the generated `.ioc` |
+| PHY SMI (MDIO) address | `[FW-CONFIRMED]` Strapped to 0 or 1 in hardware by `RXER/PHYAD0`; the LAN8742 driver's `LAN8742_Init()` scans addresses 0–31 and does not assume a fixed value, so the hardware ambiguity does not matter |
+| PHY driver | `[FW-CONFIRMED]` LAN8742 (CubeMX offers no LAN8720 driver); register usage verified compatible — see §2.2 |
+| PHY reset release (`PB0`) | `[FW-CONFIRMED]` `PB0` is driven HIGH in `MX_GPIO_Init()`, before `MX_LWIP_Init()` runs, releasing `nRST`. It is held HIGH permanently rather than pulsed — see the power-on timing note in §2.2. |
+| LwIP version | `[FW-CONFIRMED]` v2.1.2_Cube |
+| RAW API usage in final firmware | `[FW-CONFIRMED]` `NO_SYS=1`, `LWIP_NETCONN=0`, `LWIP_SOCKET=0` in `lwipopts.h` |
+| Static IP values | `[FW-CONFIRMED]` Controller `192.168.5.10`, PC `192.168.5.100`, mask `255.255.255.0`, no gateway — see Section 15 |
 | UDP port | `[TBD]` |
 | UDP packet format | `[TBD]` |
 | Host-side Mach integration | `[TBD]` |
@@ -1339,14 +1362,14 @@ The following items must be explicitly verified before being treated as implemen
 | MCU HSE | `[HW-CONFIRMED]` 8 MHz external crystal |
 | Network Stack | `[PROJECT-DECISION]` LwIP |
 | Transport | `[PROJECT-DECISION]` UDP |
-| LwIP API | `[TBD]` RAW API intended |
-| IP Configuration | `[PROJECT-DECISION]` Static IPv4 intended |
+| LwIP API | `[FW-CONFIRMED]` RAW API |
+| IP Configuration | `[FW-CONFIRMED]` Static IPv4 — `192.168.5.10` / `255.255.255.0`, no gateway |
 | Ethernet Transfer | `[HW-CONFIRMED]` DMA capable |
 | Motion Protocol | `[TBD]` UDP-based application protocol |
 | Host Integration | `[TBD]` Mach / LinuxCNC / custom host |
 | Network Update Rate | `[TBD]` |
 | Motion Timing | `[PROJECT-DECISION]` Must remain deterministic |
-| CoreXY | `[PROJECT-DECISION]` |
+| CoreXY | `no` |
 | Feedback Protocol | `[TBD]` |
 
 ---

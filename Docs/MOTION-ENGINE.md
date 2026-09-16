@@ -216,14 +216,14 @@ The final implementation must preserve this principle.
 According to the project hardware definition (`Docs/PINOUT.md`):
 
 ```text
-STEP_X = PC9
-STEP_Y = PA8
-STEP_Z = PA9
-STEP_A = PA10
-STEP_B = PA11
+STEP_X = PA8
+STEP_Y = PA9
+STEP_Z = PA10
+STEP_A = PA11
+STEP_B = PA12
 ```
 
-These pins have valid timer alternate-function mappings (PA8–PA11 = TIM1_CH1–CH4; PC9 = TIM3_CH4/TIM8_CH4), but per Section 10, they are deliberately configured as plain GPIO outputs and driven via DMA→BSRR rather than via their Alternate Function — because PA8–PA11 share a single TIM1 ARR (period), which would force axes Y, Z, A, and B onto one common STEP frequency.
+All five STEP pins are on `GPIOA`, in sequential order (see ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.md`). `PA8`–`PA11` have valid `TIM1_CH1`–`CH4` alternate functions; `PA12` has no TIM1 PWM-channel alternate function (only `TIM1_ETR`). Per Section 10, all five are deliberately configured as plain GPIO outputs and driven via DMA→BSRR rather than via any Alternate Function — because `PA8`–`PA11` share a single `TIM1` ARR (period), which would force axes X, Y, Z, and A onto one common STEP frequency.
 
 The exact DMA stream/mask allocation must be taken from the authoritative project pinout and verified against the STM32F407 Datasheet and Reference Manual.
 
@@ -287,16 +287,14 @@ Current STEP output grouping is:
 
 ```text
 GPIOA:
-    PA8  = Y_STEP
-    PA9  = Z_STEP
-    PA10 = A_STEP
-    PA11 = B_STEP
-
-GPIOC:
-    PC9  = X_STEP
+    PA8  = X_STEP
+    PA9  = Y_STEP
+    PA10 = Z_STEP
+    PA11 = A_STEP
+    PA12 = B_STEP
 ```
 
-Because the STEP signals are distributed across two GPIO ports, the implementation must account for both `GPIOA->BSRR` and `GPIOC->BSRR` transfers.
+All STEP signals are on `GPIOA`, so the implementation only needs to account for `GPIOA->BSRR` transfers — a single DMA stream and a single 32-bit write per tick covers all five axes.
 
 ### Timing Requirements
 
@@ -370,14 +368,13 @@ Timer PWM / Output Compare on STEP pins:
 
 The DMA implementation must support deterministic writes to the GPIO BSRR registers.
 
-Because the STEP outputs are distributed across two GPIO ports, the design must provide a suitable DMA transfer path for:
+All STEP outputs are on a single GPIO port, so the design needs only one DMA transfer path:
 
 ```text
 GPIOA->BSRR
-GPIOC->BSRR
 ```
 
-The implementation may use separate DMA streams for the two GPIO ports, provided that both transfers remain synchronized to the intended motion timeline.
+A single DMA stream, triggered by the base timer's Update event, covers all five axes with zero cross-axis timing skew (see ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.md`). The second `TIM2_UP`-capable DMA1 slot is consequently free and available for a future DIR-DMA path, if the DIR generation method (Section 24/27) is later chosen to use one.
 
 The exact DMA stream/channel selection is **TBD** and must be verified against the STM32F407 DMA mapping and all other active peripherals.
 
@@ -1183,21 +1180,53 @@ When the final architecture is selected, document the major decisions here or in
 At minimum document:
 
 ```text
-Timer allocation: TIM2 drives the shared Update-event DMA trigger for STEP generation. TIM3 was rejected as a candidate because TIM3_CH1 (PB4) is already committed to Spindle PWM at a fixed 10 kHz period — see ADR-002 in Docs/FIRMWARE-ARCHITECTURE.md §41.
-DMA allocation: Two DMA1 streams — one targeting GPIOA->BSRR (Y, Z, A, B), one targeting GPIOC->BSRR (X), both triggered by TIM2_UP (expected on Stream1/Stream7, Channel 3). Exact stream/channel assignment TBD pending verification against RM0090's DMA1 request-mapping table — the RM0090 PDF currently in this repository is a placeholder file and must be replaced before this can be confirmed. The Ethernet MAC uses its own dedicated DMA engine (not DMA1/DMA2), so no conflict is expected there.
+Timer allocation: TIM2 drives the shared Update-event DMA trigger for STEP generation, PSC=0/ARR=20 → 4 MHz (250 ns) base tick assuming 84 MHz TIM2 clock. TIM3 was rejected as a candidate because TIM3_CH1 (PB4) is already committed to Spindle PWM at a fixed 10 kHz period — see ADR-002 and ADR-004 in Docs/FIRMWARE-ARCHITECTURE.md §41.
+DMA allocation: A single DMA1 stream (Stream1/Channel3, triggered by TIM2_UP) → GPIOA->BSRR, covering all five axes (X, Y, Z, A, B — all on GPIOA per ADR-005). Confirmed against RM0090 Rev 22 Table 43 (DMA1 request mapping) — see ADR-002/ADR-004/ADR-005. The Ethernet MAC uses its own dedicated DMA engine (not DMA1/DMA2), so no conflict is expected there. The second TIM2_UP-capable slot (Stream7/Channel3) is left free by this consolidation and is the natural candidate for a future DIR-DMA path (GPIOD->BSRR) if the DIR generation method (below) is later chosen to use one.
 STEP generation mode: DMA-driven GPIO BSRR writes (not PWM/Output Compare) — see ADR-001 in Docs/FIRMWARE-ARCHITECTURE.md §41.
 Firmware execution model: Bare-metal, interrupt-driven superloop (no RTOS) — see ADR-003 in Docs/FIRMWARE-ARCHITECTURE.md §41.
-DIR generation method: TBD.
-Motion buffer architecture: TBD.
-Interpolation method: TBD.
-Position representation: TBD.
-Interrupt priorities: TBD.
+DIR generation method: CPU-timed GPIO writes on GPIOD, applied in a two-stage fill-time/play-time mechanism synchronized to the DMA half-transfer/transfer-complete (HTIF/TCIF) boundaries of the STEP-DMA buffer (distinct from, and not to be confused with, host-protocol motion segments). A reversal is armed at fill-time; the GPIOD write happens one half-period later, at play-time, with the first g=3 ticks of the target half reserved edge-free for that axis (a cycle-precise setup-margin verification confirms g=2 already sufficient against a ~502 ns worst-case software-latency budget, so g=3 carries roughly 2x margin) - never while the previous half is still autonomously outputting old-direction edges, and the hold side is satisfied unconditionally by a structural >=250 ns gap. Worst-case reversal latency is N x 250 ns, best case (N/2) x 250 ns, where N is the buffer's total tick depth (still open, ADR-008) - both far above the 200 ns setup/hold requirement. The DMA-hardware alternative (freed DMA1_Stream7/Channel3) remains the documented fallback if a motion profile ever needs faster reversals than this range allows. See ADR-006 (fully re-derived, including the cycle-precise verification) and ADR-008 in Docs/FIRMWARE-ARCHITECTURE.md §41.
+Motion buffer architecture: Two independent buffers — a small fixed-size STEP-DMA refill buffer (size TBD, tuned after hardware measurement), and a motion command buffer targeting >=128 ms of buffered motion (evidence-based target from the Mach3 SDK's ncPod reference device, Docs/MACH3-INTERFACE.md §4), statically allocated. Underflow -> controlled halt + FAULT (not EMERGENCY_STOP); overflow -> explicit backpressure, never silent overwrite. Exact command encoding and final depth remain blocked on the UDP protocol — see ADR-008 in Docs/FIRMWARE-ARCHITECTURE.md §41.
+Interpolation method: Per-axis DDA/Bresenham accumulator at the 4 MHz base tick, fed by step-domain (not engineering-unit) time-sliced velocity commands; all mm/inch<->step conversion happens on the PC-side Mach3 plugin, never in firmware — see ADR-007 in Docs/FIRMWARE-ARCHITECTURE.md §41.
+Position representation: int64_t, raw step counts (not engineering units) — matches the SDK's own GMoves.DDA1/2/3 field width (__int64) and permanently avoids overflow at the fixed 2 MHz maximum rate — see ADR-009 in Docs/FIRMWARE-ARCHITECTURE.md §41.
+Interrupt priorities: Fixed for the peripherals configured so far — EXTI2 (E-STOP) highest, other EXTI next, DMA1 Stream1 (STEP refill) next, ETH lower, SysTick lowest, TIM2 global interrupt disabled — see ADR-004 in Docs/FIRMWARE-ARCHITECTURE.md §41. Priorities for not-yet-configured peripherals (including a possible future DMA1 Stream7 for DIR) remain TBD.
 Maximum measured STEP rate: TBD — not yet tested on hardware.
 Maximum measured simultaneous axis rate: TBD — not yet tested on hardware.
 Measured jitter: TBD.
 Measured CPU load: TBD.
 Ethernet stress result: TBD.
 ```
+
+## Phase 1 implementation status (2026-09-16)
+
+The block above records the decisions as frozen before coding. Phase 1
+implemented them; the table below is what the code actually does and where
+it differs. Full reasoning is in `Docs/FIRMWARE-ARCHITECTURE.md` §41.
+
+| Item | As built | Status |
+|---|---|---|
+| Base tick | 4.000 MHz exactly, PSC = 0 | As decided (ADR-004) |
+| Timer | **TIM8** (APB2, 168 MHz, ARR = 41) | **DEVIATES from TIM2** — see ADR-012 |
+| DMA | **DMA2 Stream 1, Channel 7 (`TIM8_UP`)** → `GPIOA->BSRR` | **DEVIATES from DMA1 Stream1** — RM0090 §2.1 / Fig 33 / §10.3.16: DMA1's peripheral port is not a bus-matrix master and cannot reach GPIO at all. ADR-012. Needs an owner decision and an `.ioc` change |
+| Stream config | memory→peripheral, 32/32-bit, MINC, PINC off, circular, HT+TC+TE+DME interrupts, very high priority, direct mode (FIFO off) | As decided (ADR-004) |
+| STEP pins | PA8..PA12, single port, one BSRR word per tick | As decided (ADR-005) |
+| STEP pulse width | exactly one tick = 250 ns | As decided; HV-10 measures |
+| Execution model | bare-metal, interrupt-driven | As decided (ADR-003) |
+| DIR generation | CPU-timed `GPIOD` writes, two-stage arm-at-fill / write-at-play, `g = 3` guard ticks | As decided (ADR-006) |
+| DIR armed-slot depth | one per axis; a second reversal **stalls the new segment** rather than overwriting the pending one | As decided (ADR-006). Implementing this exposed a defect in a first cut that overwrote instead of waiting, which silently ran the axis the wrong way; a regression test now covers it |
+| Interpolation | 32-bit DDA phase accumulator per axis, step domain, increment clamped to 2^31 | As decided (ADR-007) |
+| Position | `int64_t` step counts; `pos_planned` and `pos_output` tracked separately | As decided (ADR-009) |
+| STEP-DMA buffer depth N | **1024 ticks** (256 µs ring, 128 µs refill deadline, 4 KB, 7.8 kHz ISR, reversal latency 128–256 µs) | ADR-008 left this **OPEN**; 1024 is a documented default, not a decision. HV-04 informs the final value |
+| Motion command buffer | 64 segment slots, lock-free SPSC, push refused when full (backpressure, never overwrite) | As decided (ADR-008). The ≥128 ms target depends on the Phase 3 slice duration and cannot be fixed yet |
+| Underflow | hard integrity fault + stop + `EN` deasserted; never a stale replay | As decided (ADR-008/ADR-010) |
+| Starvation / comm pause | position held, STEP stops, **`EN` stays asserted** | As decided (ADR-010, owner-confirmed) |
+| State model | `SAFE_IDLE → READY ⇄ RUNNING`, `FAULT`, latching `EMERGENCY_STOP`; recovery always explicit; a fault-clear can never clear an E-stop | As decided (ADR-010) |
+| Interrupt priorities | E-STOP 0, other inputs 1, STEP-DMA 2, Ethernet 5 | As decided (ADR-004); vector is `DMA2_Stream1_IRQn` per ADR-012 |
+| Ring memory | SRAM2 (`.stepgen_ram`, NOLOAD), separate bus-matrix slave from the SRAM1 Ethernet will use | New; ADR-002's isolation intent made concrete. HV-03 verifies placement |
+| Maximum measured STEP rate | TBD — not tested on hardware | HV-10 |
+| Maximum measured simultaneous axis rate | TBD — not tested on hardware | HV-11 (the §30 requirement) |
+| Measured jitter | TBD — §20 leaves the limit TBD; HV-11 should measure it and set it | HV-11 |
+| Measured CPU load | TBD. Estimated ~25 Cortex-M4 cycles/tick ≈ 60% duty at the 4 MHz tick, from generated-code inspection. **Above the 50% target; the main open risk** | HV-04, RISK-1 |
+| Ethernet stress result | TBD — requires Phase 2 | HV-15 |
 
 This information should be updated after implementation and validation.
 
