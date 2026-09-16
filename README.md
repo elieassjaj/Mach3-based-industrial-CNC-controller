@@ -170,6 +170,8 @@ Mach3-based-industrial-CNC-controller/
 | [`Docs/FIRMWARE-ARCHITECTURE.md`](Docs/FIRMWARE-ARCHITECTURE.md) | Firmware subsystem boundaries, priorities, real-time rules, safety and AI-development constraints |
 | [`Docs/MOTION-ENGINE.md`](Docs/MOTION-ENGINE.md) | STEP/DIR timing requirements, multi-axis behavior, buffering and acceptance criteria |
 | [`Docs/ETHERNET.md`](Docs/ETHERNET.md) | LAN8720A/RMII, Ethernet MAC/DMA, LwIP and UDP architecture |
+| [`Docs/HARDWARE-VALIDATION.md`](Docs/HARDWARE-VALIDATION.md) | Procedure for measuring the motion requirements on real hardware |
+| [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) | Phase 1 results, assumptions, blockers and open risks |
 | [`Docs/MACH3-INTERFACE.md`](Docs/MACH3-INTERFACE.md) | How Mach3 drives an external motion device, established from the SDK |
 | [`Docs/FIRMWARE-IMPLEMENTATION-PLAN.md`](Docs/FIRMWARE-IMPLEMENTATION-PLAN.md) | Firmware module breakdown, protocol dependencies, frozen-assumption list, implementation/verification order |
 | [`Docs/PRE-IMPLEMENTATION-DECISIONS.md`](Docs/PRE-IMPLEMENTATION-DECISIONS.md) | Per-item decision list: requirement, what was undecided, dependents, resolution or explicit open question |
@@ -400,15 +402,19 @@ This repository is intended to be developed with AI assistance. The following ru
 | Motion engine requirements | Documented |
 | Ethernet/LwIP architecture | Documented |
 | `Firmware/` STM32CubeIDE project | Present — peripheral initialization only (see [Firmware Project State](#firmware-project-state)) |
-| STEP-DMA base timer & DMA allocation | TIM2, single DMA1 Stream1/Channel3, all 5 axes on GPIOA (`PA8`–`PA12`) — confirmed against RM0090 (ADR-002, ADR-004, ADR-005) and matched by the generated code |
+| STEP-DMA base timer & DMA allocation | **Corrected to TIM8 + DMA2 Stream1/Channel7** (ADR-012). The frozen `TIM2`+`DMA1_Stream1` path cannot work: RM0090 §2.1 and Figure 33 show DMA1's peripheral port is not a bus-matrix master, so it cannot reach `GPIOA->BSRR` at all. **Needs an owner decision and an `.ioc` change** — see [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) §2 |
+| All 5 STEP axes on one GPIO port (`PA8`–`PA12`) | As decided (ADR-005) — one BSRR word per tick, zero cross-axis skew |
 | Firmware execution model | Bare-metal, interrupt-driven superloop (ADR-003) — superloop body not yet written |
 | STM32 Datasheet / RM0090 / Errata PDFs | Uploaded and verified |
 | CubeMX `.ioc` peripheral configuration | Clock, GPIO, EXTI/NVIC, TIM2 + DMA, TIM3 spindle PWM, Ethernet RMII and LwIP configured |
 | Ethernet bring-up | PHY release, LAN8742-compatible driver, static IP and `MX_LWIP_Process()` all in place; untested on real hardware |
-| Motion engine / STEP generation code | Not started — no BSRR buffer, no DMA start, timers not started |
+| Motion engine / STEP generation code | **Implemented (Phase 1)** — DDA step generator, DMA→BSRR ring, ADR-006 CPU-timed DIR, ADR-010 state model. 1131 host checks passing; cross-compiles clean for Cortex-M4F |
+| Motion hardware validation plan | **Written** — [`Docs/HARDWARE-VALIDATION.md`](Docs/HARDWARE-VALIDATION.md), plus on-target self-tests HV-00..HV-05 |
+| On-target self-tests | Implemented, **not yet run** (no hardware available) |
+| Measured CPU headroom | **Not measured** — estimated ~60% duty at the 4 MHz tick; HV-04 is the gate. See RISK-1 in [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) |
 | Mach3 host-side plugin | Not started |
 | Final UDP application protocol | TBD |
-| Verified 3-axis @ 2 MHz performance | Not yet validated |
+| Verified 3-axis @ 2 MHz performance | **Not validated** — requires HV-11 on real hardware; explicitly not claimed |
 | Production-ready firmware | Not yet complete |
 
 ---

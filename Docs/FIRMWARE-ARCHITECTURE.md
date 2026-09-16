@@ -1772,6 +1772,116 @@ EMERGENCY_STOP → SAFE_IDLE (only via an explicit clear/reset action, AND the p
 
 ---
 
+---
+
+### ADR-012 — STEP-DMA path correction: DMA1 cannot reach GPIO
+
+**Status:** RAISED BY IMPLEMENTATION. Needs a project-owner decision.
+Phase 1 firmware is written against the corrected path; the `.ioc` still
+carries the original one.
+
+**Problem found.** ADR-002/ADR-004/ADR-005 route
+`TIM2_UP → DMA1_Stream1 → GPIOA->BSRR`, and `CNC5AX-ETH.ioc` is configured
+that way (`Dma.Request0=TIM2_UP/CH3`, `Instance=DMA1_Stream1`,
+`Direction=DMA_MEMORY_TO_PERIPH`). Verified against this repository's own
+RM0090 Rev 22, **that transfer cannot happen on this MCU.**
+
+Four independent statements in RM0090 combine to settle it:
+
+1. **§2.1, STM32F405xx/07xx.** The bus-matrix masters are: Cortex-M4
+   I-bus, D-bus and S-bus; **DMA1 memory bus**; DMA2 memory bus;
+   **DMA2 peripheral bus**; Ethernet DMA bus; USB OTG HS DMA bus. The
+   **DMA1 *peripheral* bus is not in the list.**
+2. **§2.1, same list.** The bus-matrix *slaves* include "AHB1 peripherals
+   including AHB to APB bridges and APB peripherals". GPIOA is an AHB1
+   peripheral (`0x4002 0000`, clock-gated by `RCC_AHB1ENR`), so it is only
+   reachable *through* the bus matrix.
+3. **Figure 33, note 1.** "The DMA1 controller AHB peripheral port is not
+   connected to the bus matrix like DMA2 controller." ADR-006 already
+   quotes this line, but takes from it only the memory-to-memory
+   consequence the note happens to mention; the note is about the port,
+   not about that one transfer type.
+4. **§10.3.16 table and §10.3.17 step 2.** For a memory-to-peripheral
+   transfer the source is the AHB *memory* port and the destination is the
+   AHB *peripheral* port, and `DMA_SxPAR` is explicitly "the peripheral
+   port register address... moved to this address *to the peripheral
+   port*".
+
+Putting `&GPIOA->BSRR` in `DMA_SxPAR` on DMA1 therefore asks the one port
+that is not on the bus matrix to reach a slave that only exists on it.
+Inverting the transfer does not help: DMA1's peripheral port cannot reach
+SRAM either, for the same reason.
+
+**Consequence.** Only DMA2's peripheral port can write a GPIO BSRR, and
+**RM0090 Table 44 gives DMA2 timer requests for TIM1 and TIM8 only** — so
+the base timer cannot be TIM2 either. This is not a tuning question; the
+configured path would produce no STEP pulses at all.
+
+**Correction implemented in Phase 1 firmware:**
+
+```text
+TIM8 UP  ──►  DMA2 Stream 1, Channel 7  ──►  GPIOA->BSRR
+```
+
+- `TIM8_UP → DMA2 Stream1 Ch7` is RM0090 Table 44, verified directly.
+- TIM8 is on APB2, whose timer clock is 168 MHz in this project's own
+  `.ioc` (`RCC.APB2TimFreq_Value=168000000`). `PSC = 0, ARR = 41` gives
+  exactly 4.000 MHz, preserving ADR-004's base tick with no rounding.
+- TIM1 is the equally valid alternative (`TIM1_UP → DMA2 Stream5 Ch6`).
+  TIM8 was chosen so TIM1 stays free; TIM3 remains the spindle PWM.
+
+**Everything else in the frozen decisions is preserved:** the 4 MHz base
+tick and its reasoning (ADR-004), the single-GPIOA-port consolidation and
+its zero-skew property (ADR-005), CPU-timed DIR with the two-stage
+arm/play mechanism and `g = 3` (ADR-006), direct mode with one transfer
+per request, circular with HT/TC interrupts, very-high stream priority,
+and the NVIC ordering (E-STOP 0, other inputs 1, STEP-DMA 2, Ethernet 5).
+
+**What ADR-005's reasoning loses, and what it does not.** ADR-005's
+"frees `DMA1_Stream7` for a future DIR-DMA path" no longer applies, since
+STEP is not on DMA1 at all. The DIR-DMA fallback is still available and
+is in fact better placed: DMA2 Streams 2, 3 and 4 carry `TIM8_CH1/CH2/CH3`
+(Table 44), any of which can drive `GPIOD->BSRR` from the same timer.
+ADR-005's other reasons — one BSRR word for all five axes, no cross-port
+arbitration skew, one stream instead of two — are unaffected and are
+exactly why the corrected design is still single-stream.
+
+**Alternatives considered:**
+
+- *Keep TIM2/DMA1 and accept it* — not viable; it produces no output.
+- *TIM2 + DMA1 into an APB1 peripheral that mirrors to GPIO* — no such
+  path exists on this part.
+- *CPU-written STEP from a TIM2 interrupt* — forbidden by ADR-001 and by
+  `Docs/MOTION-ENGINE.md` §27 ("CPU-generated STEP edges: Not allowed"),
+  and a 4 MHz interrupt is exactly what ADR-004 rules out.
+- *TIM1 instead of TIM8* — equivalent; see above.
+
+**Timing impact:** None relative to ADR-004's intent. The base tick, pulse
+width, DIR margins and jitter analysis are unchanged; only the peripheral
+instances differ.
+
+**Memory impact:** None.
+
+**CPU impact:** None.
+
+**Risks:**
+
+1. **The `.ioc` still specifies TIM2/DMA1_Stream1 and must be changed** —
+   `TIM2` replaced by `TIM8`, the DMA request re-added as `TIM8_UP` on
+   `DMA2_Stream1`, and `NVIC.DMA1_Stream1_IRQn` replaced by
+   `DMA2_Stream1_IRQn` at the same priority 2. Until that is done the
+   generated code and the motion firmware disagree about the hardware.
+2. This ADR contradicts three frozen ADRs. It is raised rather than
+   applied silently, per `Docs/FIRMWARE-ARCHITECTURE.md` §42 Rule 9 and
+   the source-of-truth hierarchy of §13, which puts official silicon
+   documentation above prior project decisions on hardware questions.
+3. The reading above is a documentation analysis. Test **HV-00** settles
+   it empirically on silicon: it runs the timebase and confirms the
+   stream's `NDTR` actually advances at the base-tick rate. The same test
+   built against DMA1 should fail.
+
+**Validation result:** NOT RUN — pending hardware (HV-00).
+
 # 42. AI-Assisted Development Rules
 
 This repository is intended to support AI-assisted firmware development.

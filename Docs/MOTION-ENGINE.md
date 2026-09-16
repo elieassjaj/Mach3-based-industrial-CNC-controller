@@ -1196,6 +1196,38 @@ Measured CPU load: TBD.
 Ethernet stress result: TBD.
 ```
 
+## Phase 1 implementation status (2026-09-16)
+
+The block above records the decisions as frozen before coding. Phase 1
+implemented them; the table below is what the code actually does and where
+it differs. Full reasoning is in `Docs/FIRMWARE-ARCHITECTURE.md` §41.
+
+| Item | As built | Status |
+|---|---|---|
+| Base tick | 4.000 MHz exactly, PSC = 0 | As decided (ADR-004) |
+| Timer | **TIM8** (APB2, 168 MHz, ARR = 41) | **DEVIATES from TIM2** — see ADR-012 |
+| DMA | **DMA2 Stream 1, Channel 7 (`TIM8_UP`)** → `GPIOA->BSRR` | **DEVIATES from DMA1 Stream1** — RM0090 §2.1 / Fig 33 / §10.3.16: DMA1's peripheral port is not a bus-matrix master and cannot reach GPIO at all. ADR-012. Needs an owner decision and an `.ioc` change |
+| Stream config | memory→peripheral, 32/32-bit, MINC, PINC off, circular, HT+TC+TE+DME interrupts, very high priority, direct mode (FIFO off) | As decided (ADR-004) |
+| STEP pins | PA8..PA12, single port, one BSRR word per tick | As decided (ADR-005) |
+| STEP pulse width | exactly one tick = 250 ns | As decided; HV-10 measures |
+| Execution model | bare-metal, interrupt-driven | As decided (ADR-003) |
+| DIR generation | CPU-timed `GPIOD` writes, two-stage arm-at-fill / write-at-play, `g = 3` guard ticks | As decided (ADR-006) |
+| DIR armed-slot depth | one per axis; a second reversal **stalls the new segment** rather than overwriting the pending one | As decided (ADR-006). Implementing this exposed a defect in a first cut that overwrote instead of waiting, which silently ran the axis the wrong way; a regression test now covers it |
+| Interpolation | 32-bit DDA phase accumulator per axis, step domain, increment clamped to 2^31 | As decided (ADR-007) |
+| Position | `int64_t` step counts; `pos_planned` and `pos_output` tracked separately | As decided (ADR-009) |
+| STEP-DMA buffer depth N | **1024 ticks** (256 µs ring, 128 µs refill deadline, 4 KB, 7.8 kHz ISR, reversal latency 128–256 µs) | ADR-008 left this **OPEN**; 1024 is a documented default, not a decision. HV-04 informs the final value |
+| Motion command buffer | 64 segment slots, lock-free SPSC, push refused when full (backpressure, never overwrite) | As decided (ADR-008). The ≥128 ms target depends on the Phase 3 slice duration and cannot be fixed yet |
+| Underflow | hard integrity fault + stop + `EN` deasserted; never a stale replay | As decided (ADR-008/ADR-010) |
+| Starvation / comm pause | position held, STEP stops, **`EN` stays asserted** | As decided (ADR-010, owner-confirmed) |
+| State model | `SAFE_IDLE → READY ⇄ RUNNING`, `FAULT`, latching `EMERGENCY_STOP`; recovery always explicit; a fault-clear can never clear an E-stop | As decided (ADR-010) |
+| Interrupt priorities | E-STOP 0, other inputs 1, STEP-DMA 2, Ethernet 5 | As decided (ADR-004); vector is `DMA2_Stream1_IRQn` per ADR-012 |
+| Ring memory | SRAM2 (`.stepgen_ram`, NOLOAD), separate bus-matrix slave from the SRAM1 Ethernet will use | New; ADR-002's isolation intent made concrete. HV-03 verifies placement |
+| Maximum measured STEP rate | TBD — not tested on hardware | HV-10 |
+| Maximum measured simultaneous axis rate | TBD — not tested on hardware | HV-11 (the §30 requirement) |
+| Measured jitter | TBD — §20 leaves the limit TBD; HV-11 should measure it and set it | HV-11 |
+| Measured CPU load | TBD. Estimated ~25 Cortex-M4 cycles/tick ≈ 60% duty at the 4 MHz tick, from generated-code inspection. **Above the 50% target; the main open risk** | HV-04, RISK-1 |
+| Ethernet stress result | TBD — requires Phase 2 | HV-15 |
+
 This information should be updated after implementation and validation.
 
 ---
