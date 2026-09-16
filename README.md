@@ -402,16 +402,17 @@ This repository is intended to be developed with AI assistance. The following ru
 | Motion engine requirements | Documented |
 | Ethernet/LwIP architecture | Documented |
 | `Firmware/` STM32CubeIDE project | Present — peripheral initialization only (see [Firmware Project State](#firmware-project-state)) |
-| STEP-DMA base timer & DMA allocation | **Corrected to TIM8 + DMA2 Stream1/Channel7** (ADR-012). The frozen `TIM2`+`DMA1_Stream1` path cannot work: RM0090 §2.1 and Figure 33 show DMA1's peripheral port is not a bus-matrix master, so it cannot reach `GPIOA->BSRR` at all. **Needs an owner decision and an `.ioc` change** — see [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) §2 |
+| STEP-DMA base timer & DMA allocation | **TIM8 + DMA2 Stream1/Channel7** (ADR-012, accepted). The original `TIM2`+`DMA1_Stream1` path could not work — RM0090 §2.1 and Figure 33 show DMA1's peripheral port is not a bus-matrix master, so it cannot reach `GPIOA->BSRR` at all. `.ioc` updated and verified |
 | All 5 STEP axes on one GPIO port (`PA8`–`PA12`) | As decided (ADR-005) — one BSRR word per tick, zero cross-axis skew |
 | Firmware execution model | Bare-metal, interrupt-driven superloop (ADR-003) — superloop body not yet written |
 | STM32 Datasheet / RM0090 / Errata PDFs | Uploaded and verified |
 | CubeMX `.ioc` peripheral configuration | Clock, GPIO, EXTI/NVIC, TIM2 + DMA, TIM3 spindle PWM, Ethernet RMII and LwIP configured |
 | Ethernet bring-up | PHY release, LAN8742-compatible driver, static IP and `MX_LWIP_Process()` all in place; untested on real hardware |
-| Motion engine / STEP generation code | **Implemented (Phase 1)** — DDA step generator, DMA→BSRR ring, ADR-006 CPU-timed DIR, ADR-010 state model. 1131 host checks passing; cross-compiles clean for Cortex-M4F |
+| Motion engine / STEP generation code | **Implemented and integrated (Phase 1)** — DDA step generator, DMA→BSRR ring, ADR-006 CPU-timed DIR, ADR-010 state model. 1150 host checks passing |
+| Full firmware build | **Links clean** — 84 KB flash (8.2%), SRAM1 36.7%, SRAM2 25% (STEP ring isolated in SRAM2) |
 | Motion hardware validation plan | **Written** — [`Docs/HARDWARE-VALIDATION.md`](Docs/HARDWARE-VALIDATION.md), plus on-target self-tests HV-00..HV-05 |
 | On-target self-tests | Implemented, **not yet run** (no hardware available) |
-| Measured CPU headroom | **Not measured** — estimated ~60% duty at the 4 MHz tick; HV-04 is the gate. See RISK-1 in [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) |
+| Measured CPU headroom | **Not measured** — estimated ~60-70% duty at the 2 MHz ceiling; scales down with `stepgen_configure_max_rate()` (1 MHz ceiling ≈ half). HV-04 is the gate. See RISK-1 in [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) |
 | Mach3 host-side plugin | Not started |
 | Final UDP application protocol | TBD |
 | Verified 3-axis @ 2 MHz performance | **Not validated** — requires HV-11 on real hardware; explicitly not claimed |

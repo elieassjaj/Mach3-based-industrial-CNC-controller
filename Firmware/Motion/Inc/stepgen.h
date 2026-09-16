@@ -15,6 +15,31 @@
 /** Initialise engine and hardware. Ends in SAFE_IDLE with drives disabled. */
 bool stepgen_init(void);
 
+/**
+ * Set the machine's maximum per-axis STEP rate, which selects the engine
+ * base tick (tick = 2 x max_step_rate_hz).
+ *
+ * This is the one lever that trades capability for CPU. The refill cost is
+ * proportional to the TICK rate, not to how fast the axes are actually
+ * commanded to move: at a fixed 4 MHz tick the engine costs the same
+ * whether an axis is running at 2 MHz or at 100 Hz. So a machine that
+ * never needs 2 MHz should say so here and get the CPU back.
+ *
+ *     max rate    tick      refill cost (relative)
+ *     2 MHz       4 MHz     1.00   <- the project ceiling
+ *     1 MHz       2 MHz     0.50
+ *     500 kHz     1 MHz     0.25
+ *
+ * Only exact integer dividers of the timer clock are accepted, so no
+ * commanded feed rate ever carries a systematic divider error. Legal only
+ * while stopped (SAFE_IDLE). Rates above MOTION_STEP_RATE_MAX_HZ are
+ * rejected.
+ */
+bool stepgen_configure_max_rate(uint32_t max_step_rate_hz);
+
+/** Maximum per-axis STEP rate the engine is currently configured for. */
+uint32_t stepgen_max_rate_hz(void);
+
 /** SAFE_IDLE -> READY: energise the drives. */
 bool stepgen_enable_drives(void);
 

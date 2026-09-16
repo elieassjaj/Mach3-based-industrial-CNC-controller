@@ -108,6 +108,14 @@
  * HIGH = drivers enabled. Reset state must be LOW.                         */
 #define CNC_EN_ACTIVE_HIGH          1
 
+/* ------------------------------------------------------- bring-up ------ */
+/* Run the on-target hardware self-tests (HV-00..HV-05) once at boot.
+ * Off by default; turn it on during hardware bring-up. Safe either way -
+ * the drives stay disabled and the timebase is stopped between tests. */
+#ifndef CNC_RUN_SELFTEST_AT_BOOT
+#define CNC_RUN_SELFTEST_AT_BOOT    0
+#endif
+
 /* STEP polarity is FIXED active-high (§4.1) and is not configurable.
  * DIR is active-high at the pin (§6), but the mapping from "positive axis
  * motion" to DIR level is machine configuration that §25 forbids assuming,

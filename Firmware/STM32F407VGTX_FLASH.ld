@@ -46,7 +46,15 @@ _Min_Stack_Size = 0x400; /* required amount of stack */
 MEMORY
 {
   CCMRAM    (xrw)    : ORIGIN = 0x10000000,   LENGTH = 64K
-  RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 128K
+  /* SRAM1 and SRAM2 are separate slave ports on the STM32F407 bus matrix
+     (RM0090 Rev 22 §2.1). They are split here, rather than left as one
+     contiguous 128K region, so the STEP DMA ring can live in SRAM2 while
+     Ethernet descriptors and the LwIP pbuf pool stay in SRAM1 - the two
+     then never contend for the same slave port. See ADR-002/ADR-012 and
+     Platform/STM32F407/linker/stepgen_sram2.ld. Test HV-03 checks at
+     runtime that the ring really landed in SRAM2. */
+  RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 112K
+  SRAM2    (xrw)    : ORIGIN = 0x2001C000,   LENGTH = 16K
   FLASH    (rx)    : ORIGIN = 0x8000000,   LENGTH = 1024K
 }
 
@@ -187,6 +195,19 @@ SECTIONS
   } >RAM
 
   /* User_heap_stack section, used to check that there is enough "RAM" Ram  type memory left */
+  /* STEP DMA ring (see the SRAM2 note above). NOLOAD: the ring is written
+     in full by stepgen_core_blank() before the timebase ever starts, so
+     there is no reason to spend flash and a startup copy on it. */
+  .stepgen_ram (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __stepgen_ram_start__ = .;
+    *(.stepgen_ram)
+    *(.stepgen_ram*)
+    . = ALIGN(32);
+    __stepgen_ram_end__ = .;
+  } >SRAM2
+
   ._user_heap_stack :
   {
     . = ALIGN(8);

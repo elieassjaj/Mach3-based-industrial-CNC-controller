@@ -6,6 +6,18 @@
 
 #include <string.h>
 
+/* The emission loop below is the only piece of this subsystem with a hard
+ * deadline, and it is entirely register-resident at -O2. STM32CubeIDE's
+ * Debug configuration builds at -Og, which spills three values back to the
+ * stack and costs roughly 30% more per tick - margin that vanishes without
+ * anything visibly failing, and only on the configuration people actually
+ * debug with. This translation unit therefore pins its own optimisation
+ * level instead of inheriting one. Define STEPGEN_NO_OPT_PRAGMA to opt out
+ * (e.g. to single-step through the generator). */
+#if defined(__GNUC__) && !defined(STEPGEN_NO_OPT_PRAGMA)
+#pragma GCC optimize ("O2")
+#endif
+
 /* The emission loop shifts the five accumulator carries straight into
  * PA8..PA12 instead of OR-ing per-axis masks, which is only valid while the
  * pinout keeps those pins consecutive and in axis order X,Y,Z,A,B. */

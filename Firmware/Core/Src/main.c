@@ -26,6 +26,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
+#include "stepgen.h"
+#include "stepgen_selftest.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -47,6 +49,12 @@
 
 /* USER CODE BEGIN PV */
 
+/* Motion engine bring-up status, readable over SWD. */
+volatile bool     g_stepgen_ready;
+volatile uint32_t g_stepgen_tick_hz;
+#if CNC_RUN_SELFTEST_AT_BOOT
+volatile bool     g_stepgen_selftest_pass;
+#endif
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -94,6 +102,30 @@ int main(void)
   MX_LWIP_Init();
   MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
+
+  /* Motion engine (Phase 1).
+   *
+   * stepgen_init() configures TIM8 + DMA2_Stream1 + the STEP/DIR/EN GPIOs
+   * and leaves the engine in SAFE_IDLE with the drives DISABLED (PD15 low,
+   * active high per Docs/PINOUT.md). Nothing moves until something calls
+   * stepgen_enable_drives() and stepgen_start(), which is deliberate: the
+   * host protocol that will do so is Phase 3 work.
+   *
+   * If this machine's maximum STEP rate is below the 2 MHz project
+   * ceiling, declare it here - the refill cost follows the base tick, not
+   * the commanded speed, so a lower ceiling directly returns CPU time:
+   *
+   *   stepgen_configure_max_rate(1000000u);   // 1 MHz -> half the cost
+   */
+  g_stepgen_ready   = stepgen_init();
+  g_stepgen_tick_hz = stepgen_tick_hz();
+
+#if CNC_RUN_SELFTEST_AT_BOOT
+  /* Hardware validation HV-00..HV-05 (Docs/HARDWARE-VALIDATION.md).
+   * Safe to run: the drives are still disabled and the timebase is stopped
+   * between tests. Inspect stepgen_selftest_results() over SWD. */
+  g_stepgen_selftest_pass = stepgen_selftest_run_all();
+#endif
 
   /* USER CODE END 2 */
 

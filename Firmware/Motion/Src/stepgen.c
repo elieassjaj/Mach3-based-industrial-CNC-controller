@@ -170,6 +170,24 @@ bool stepgen_init(void)
     return true;
 }
 
+bool stepgen_configure_max_rate(uint32_t max_step_rate_hz)
+{
+    if (g_state != STEPGEN_STATE_SAFE_IDLE) {
+        return false;                    /* only while stopped */
+    }
+    if (max_step_rate_hz == 0u || max_step_rate_hz > MOTION_STEP_RATE_MAX_HZ) {
+        return false;
+    }
+    /* A STEP pulse is one tick wide and must be followed by at least one
+     * low tick, so the tick has to be twice the maximum rate. */
+    return stepgen_port_set_tick_hz(2u * max_step_rate_hz);
+}
+
+uint32_t stepgen_max_rate_hz(void)
+{
+    return stepgen_port_get_tick_hz() / 2u;
+}
+
 bool stepgen_enable_drives(void)
 {
     if (g_state != STEPGEN_STATE_SAFE_IDLE) {

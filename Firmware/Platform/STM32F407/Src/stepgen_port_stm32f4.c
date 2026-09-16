@@ -204,14 +204,15 @@ uint32_t stepgen_port_dma_errors(void) { return s_dma_errors; }
 /* ---------------------------------------------------------------------- */
 
 /**
- * Ring-boundary interrupt (NVIC priority 2, ADR-004).
+ * Ring-boundary interrupt body (NVIC priority 2, ADR-004). Invoked from the
+ * CubeMX-generated DMA2_Stream1_IRQHandler().
  *
  * Seeing the half-transfer AND transfer-complete flags pending in the same
  * entry proves this handler is at least a half-buffer late, so the DMA has
  * already re-emitted words the engine never refreshed. That is uncommanded
  * motion, not a recoverable hiccup, so it hard-faults.
  */
-void STEPGEN_DMA_IRQHandler(void)
+void stepgen_dma_isr(void)
 {
     const uint32_t isr = STEPGEN_DMA_ISR;
     const bool ht = (isr & STEPGEN_DMA_HTIF) != 0u;

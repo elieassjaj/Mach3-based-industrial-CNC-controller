@@ -52,7 +52,14 @@
 #define STEPGEN_DMA_STREAM          DMA2_Stream1
 #define STEPGEN_DMA_CHSEL           7u
 #define STEPGEN_DMA_IRQn            DMA2_Stream1_IRQn
-#define STEPGEN_DMA_IRQHandler      DMA2_Stream1_IRQHandler
+
+/* The vector itself stays owned by the CubeMX-generated stm32f4xx_it.c, so
+ * regenerating the project never produces a duplicate-symbol clash with
+ * this port. That stub calls stepgen_dma_isr() from its USER CODE block and
+ * returns before HAL_DMA_IRQHandler(), which must not run: this stream is
+ * configured at register level, not through the HAL DMA handle, so letting
+ * HAL service it would clear flags and fire callbacks behind our back. */
+#define STEPGEN_DMA_VECTOR_NAME     "DMA2_Stream1_IRQHandler"
 
 /* Stream 1 lives in the low interrupt-status/clear register pair. */
 #define STEPGEN_DMA_ISR             (STEPGEN_DMA->LISR)

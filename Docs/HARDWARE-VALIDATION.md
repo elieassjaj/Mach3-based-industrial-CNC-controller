@@ -287,7 +287,7 @@ replaced by an expectation.
 | HV-00 STEP DMA path | NOT RUN | — | — | Settles ADR-012 |
 | HV-01 BSRR priority | NOT RUN | — | — | |
 | HV-02 Tick frequency | NOT RUN | — | — | |
-| HV-03 SRAM2 placement | NOT RUN | — | — | |
+| HV-03 SRAM2 placement | **PASS (static)** | `0x2001C000`–`0x2001D000` | 2026-09-16 | Confirmed in the linked map; re-confirm at runtime on target |
 | HV-04 Refill cost | NOT RUN | — | — | RISK-1; estimate ~60% duty |
 | HV-05 E-STOP path | NOT RUN | — | — | |
 | HV-10 1 axis @ 2 MHz | NOT RUN | — | — | |
@@ -304,7 +304,7 @@ replaced by an expectation.
 
 ## 7. What the host test suite already establishes
 
-`cd Firmware && make test` — 1131 checks, all passing at the time of
+`cd Firmware && make test` — 1150 checks, all passing at the time of
 writing. It reconstructs the pin waveform from the BSRR word stream and
 the CPU-timed DIR writes, then measures it in nanoseconds, so it checks
 the same properties HV-1x will.
@@ -322,6 +322,7 @@ the same properties HV-1x will.
 | All 200 reversals in a long run honour the guard | pass |
 | No STEP on the tick the DIR line changes | pass |
 | Reversals faster than a ring period stall, never drop | pass (0 violations) |
+| Max-rate lever scales the tick, waveform stays exact | pass |
 | Starvation holds position with drives enabled | pass |
 | Missed refill deadline faults and drops the drives | pass |
 | E-STOP latches; a fault-clear cannot clear it | pass |

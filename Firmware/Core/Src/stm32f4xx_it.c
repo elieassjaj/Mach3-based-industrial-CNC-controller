@@ -22,6 +22,7 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "stepgen_port_stm32f4.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -311,7 +312,14 @@ void EXTI15_10_IRQHandler(void)
 void DMA2_Stream1_IRQHandler(void)
 {
   /* USER CODE BEGIN DMA2_Stream1_IRQn 0 */
-
+  /* The STEP ring is driven at register level, not through the HAL DMA
+   * handle (ADR-004 rejects HAL_TIM_Base_Start_DMA because it targets the
+   * timer's own ARR rather than GPIOA->BSRR). Letting HAL_DMA_IRQHandler()
+   * run below would clear the transfer flags and invoke HAL callbacks
+   * behind the motion engine's back, so this vector is taken over
+   * completely and returns before reaching it. */
+  stepgen_dma_isr();
+  return;
   /* USER CODE END DMA2_Stream1_IRQn 0 */
   HAL_DMA_IRQHandler(&hdma_tim8_up);
   /* USER CODE BEGIN DMA2_Stream1_IRQn 1 */

@@ -1776,9 +1776,10 @@ EMERGENCY_STOP → SAFE_IDLE (only via an explicit clear/reset action, AND the p
 
 ### ADR-012 — STEP-DMA path correction: DMA1 cannot reach GPIO
 
-**Status:** RAISED BY IMPLEMENTATION. Needs a project-owner decision.
-Phase 1 firmware is written against the corrected path; the `.ioc` still
-carries the original one.
+**Status:** ACCEPTED by the project owner. The `.ioc` has been
+reconfigured to `TIM8_UP → DMA2_Stream1` and verified against this ADR;
+the full firmware builds and links. Supersedes the DMA/timer allocation in
+ADR-002 and ADR-004, and the `DMA1_Stream7` remark in ADR-005.
 
 **Problem found.** ADR-002/ADR-004/ADR-005 route
 `TIM2_UP → DMA1_Stream1 → GPIOA->BSRR`, and `CNC5AX-ETH.ioc` is configured
@@ -1866,11 +1867,11 @@ instances differ.
 
 **Risks:**
 
-1. **The `.ioc` still specifies TIM2/DMA1_Stream1 and must be changed** —
-   `TIM2` replaced by `TIM8`, the DMA request re-added as `TIM8_UP` on
-   `DMA2_Stream1`, and `NVIC.DMA1_Stream1_IRQn` replaced by
-   `DMA2_Stream1_IRQn` at the same priority 2. Until that is done the
-   generated code and the motion firmware disagree about the hardware.
+1. ~~The `.ioc` still specifies TIM2/DMA1_Stream1~~ — **closed.** The
+   `.ioc` now carries `TIM8_UP` on `DMA2_Stream1` with direct mode, word
+   width, MINC on, PINC off, circular, very-high priority, and
+   `NVIC.DMA2_Stream1_IRQn` at preempt priority 2. CubeMX's own generated
+   code independently assigns `DMA_CHANNEL_7`, matching Table 44.
 2. This ADR contradicts three frozen ADRs. It is raised rather than
    applied silently, per `Docs/FIRMWARE-ARCHITECTURE.md` §42 Rule 9 and
    the source-of-truth hierarchy of §13, which puts official silicon
@@ -1880,7 +1881,9 @@ instances differ.
    stream's `NDTR` actually advances at the base-tick rate. The same test
    built against DMA1 should fail.
 
-**Validation result:** NOT RUN — pending hardware (HV-00).
+**Validation result:** Documentation analysis complete and corroborated by
+CubeMX's own channel assignment; the integrated firmware builds and links.
+On-silicon confirmation NOT RUN — pending hardware (HV-00).
 
 # 42. AI-Assisted Development Rules
 

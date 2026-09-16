@@ -13,19 +13,20 @@ plugin (Phase 4), integration (Phase 5).
 
 | | |
 |---|---|
-| Portable motion core | Implemented, 1131 host checks passing |
+| Portable motion core | Implemented, 1150 host checks passing |
 | STM32F407 hardware port | Implemented, cross-compiles clean for Cortex-M4F |
 | On-target self-tests | Implemented, **NOT RUN** (no hardware in this environment) |
 | Waveform validation plan | `Docs/HARDWARE-VALIDATION.md`, **NOT RUN** |
 | 2 MHz / 3-axis compliance | **NOT CLAIMED** — requires HV-11 on real hardware |
 | Documentation sync | ADR-012 added; MOTION-ENGINE.md §33 updated |
-| **Blocking issue** | **ADR-012: the frozen TIM2/DMA1 STEP path cannot work on this MCU. Needs an owner decision and an `.ioc` change.** |
+| Full firmware build | **Links clean** — 84 KB flash (8.2%), SRAM1 36.7%, SRAM2 25% |
+| ADR-012 (TIM2/DMA1 → TIM8/DMA2) | **RESOLVED** — `.ioc` updated by the project owner and verified; no blocking issues remain |
 
 No compliance claim is made for any requirement Phase 1 could not measure.
 
 ---
 
-## 2. BLOCKER-1 — The frozen STEP DMA path cannot work (needs your decision)
+## 2. ADR-012 — The frozen STEP DMA path could not work (RESOLVED)
 
 ADR-002/ADR-004/ADR-005 route `TIM2_UP → DMA1_Stream1 → GPIOA->BSRR`, and
 `Firmware/CNC5AX-ETH.ioc` is configured that way. Checked against this
@@ -69,19 +70,40 @@ else frozen is preserved: single GPIOA port (ADR-005), CPU-timed DIR with
 `g = 3` (ADR-006), direct mode, one transfer per request, circular with
 HT/TC, very-high stream priority, and the NVIC ordering (ADR-004).
 
-**What you need to decide:**
+**Resolution.** The project owner accepted ADR-012 and reconfigured the
+`.ioc` accordingly. Verified in this repository:
 
-1. Accept ADR-012 (TIM8 + DMA2_Stream1), or choose TIM1 + DMA2_Stream5
-   Ch6 — both are verified in Table 44 and equivalent. TIM8 was picked so
-   TIM1 stays free.
-2. Update `CNC5AX-ETH.ioc`: TIM2 → TIM8, DMA request `TIM8_UP` on
-   `DMA2_Stream1`, and `NVIC.DMA1_Stream1_IRQn` → `DMA2_Stream1_IRQn` at
-   the same priority 2. Until then the generated code and the motion
-   firmware disagree about the hardware.
-3. Optionally settle it empirically first: **HV-00** runs the timebase and
-   checks the stream's `NDTR` actually advances. Built against DMA1 it
-   should fail outright. Running both is the cheapest way to close the
-   question.
+```text
+Dma.Request0=TIM8_UP
+Dma.TIM8_UP.0.Instance=DMA2_Stream1
+Dma.TIM8_UP.0.Direction=DMA_MEMORY_TO_PERIPH
+Dma.TIM8_UP.0.FIFOMode=DMA_FIFOMODE_DISABLE      <- direct mode, as ADR-004
+Dma.TIM8_UP.0.MemInc=DMA_MINC_ENABLE
+Dma.TIM8_UP.0.PeriphInc=DMA_PINC_DISABLE
+Dma.TIM8_UP.0.MemDataAlignment=DMA_MDATAALIGN_WORD
+Dma.TIM8_UP.0.PeriphDataAlignment=DMA_PDATAALIGN_WORD
+Dma.TIM8_UP.0.Mode=DMA_CIRCULAR
+Dma.TIM8_UP.0.Priority=DMA_PRIORITY_VERY_HIGH
+NVIC.DMA2_Stream1_IRQn=true:2:0:...              <- preempt 2, per ADR-004
+```
+
+All TIM2 references are gone, and TIM8's own global interrupt is correctly
+left disabled (ADR-004 forbids it: at the 4 MHz tick it would fire four
+million times a second).
+
+**Independent corroboration.** CubeMX's own generated code assigns
+`hdma_tim8_up.Init.Channel = DMA_CHANNEL_7` on `DMA2_Stream1` — the exact
+mapping RM0090 Table 44 gives, arrived at by the tool without reference to
+this analysis.
+
+**One gap found and fixed during integration.** The regenerated
+`MX_TIM8_Init()` carried `htim8.Init.Period = 65535` (CubeMX's default);
+the Counter Period had not been set to 41. The firmware overrides ARR at
+runtime in `stepgen_port_set_tick_hz()`, so the base tick would have been
+correct either way — but a `.ioc` that disagrees with the firmware is the
+exact condition that produced ADR-012 in the first place, so both
+`CNC5AX-ETH.ioc` (`TIM8.Period=41`) and the generated `Core/Src/tim.c`
+were corrected to agree.
 
 **One knock-on to ADR-005.** Its "frees `DMA1_Stream7` for a future
 DIR-DMA path" no longer applies, since STEP is not on DMA1. The DIR-DMA
@@ -110,7 +132,7 @@ Firmware/
 │   ├── Src/stepgen_selftest_stm32f4.c  HV-00..HV-05 + stimulus patterns
 │   └── linker/stepgen_sram2.ld         SRAM2 placement fragment
 ├── Platform/Host/Src/                  simulation port + virtual analyser
-├── Tests/test_stepgen.c                1131 checks
+├── Tests/test_stepgen.c                1150 checks
 ├── Tests/bench_fill.c                  algorithm cost proxy
 └── Makefile                            make test | bench | arm
 ```
@@ -123,11 +145,44 @@ can define the wire format without touching a line of motion code.
 
 ---
 
+## 3b. CubeIDE integration (completed)
+
+The motion subsystem is now wired into the generated project and the whole
+firmware links.
+
+| Step | What was done |
+|---|---|
+| Interrupt vector | `DMA2_Stream1_IRQHandler` stays owned by the generated `stm32f4xx_it.c`; its `USER CODE BEGIN 0` block calls `stepgen_dma_isr()` and returns. The port's handler was renamed from the vector name to avoid a duplicate-symbol clash on every regeneration |
+| HAL bypass | That `return` also skips `HAL_DMA_IRQHandler(&hdma_tim8_up)`. The stream is configured at register level, not through the HAL handle, so letting HAL service it would clear transfer flags and fire callbacks behind the engine's back. Verified in the linked image: the vector is `push / bl stepgen_dma_isr / pop` and never reaches the HAL call |
+| Linker script | `STM32F407VGTX_FLASH.ld` now splits `RAM` into SRAM1 (112 K) + `SRAM2` (16 K) and adds the `.stepgen_ram (NOLOAD)` section |
+| `main.c` | `stepgen_init()` runs after `MX_TIM8_Init()` in `USER CODE BEGIN 2`, leaving the engine in `SAFE_IDLE` with the drives disabled. **Nothing moves at boot** — starting motion is the Phase 3 host protocol's job. An optional boot self-test sits behind `CNC_RUN_SELFTEST_AT_BOOT` (default off) |
+| TIM8 period | `.ioc` and `tim.c` corrected to `41` (see §2) |
+
+**Everything lives in `USER CODE` blocks**, so regenerating from CubeMX
+does not undo any of it. The `Motion/` and `Platform/` trees sit outside
+`Core/`, which CubeMX never touches.
+
+### Linked image
+
+```
+Memory region      Used Size   Region Size   %age Used
+       CCMRAM:           0 B         64 KB       0.00%
+          RAM:       42040 B        112 KB      36.66%   (SRAM1: Ethernet, LwIP, app)
+        SRAM2:         4096 B         16 KB      25.00%   (STEP DMA ring, isolated)
+        FLASH:       86152 B          1 MB       8.22%
+```
+
+`__stepgen_ram_start__ = 0x2001C000`, `__stepgen_ram_end__ = 0x2001D000` —
+the ring is in SRAM2, so the HV-03 placement check already passes
+statically. Plenty of headroom in both regions for Phases 2-4.
+
+---
+
 ## 4. Build and test results
 
 Reproduce with `cd Firmware && make test && make bench && make arm`.
 
-### Host verification — 1131 checks, 0 failures
+### Host verification — 1150 checks, 0 failures
 
 ```
   2 MHz on X: one-tick pulse, one-tick gap, exact count   ok
@@ -140,6 +195,7 @@ Reproduce with `cd Firmware && make test && make bench && make arm`.
   missed refill deadline faults and drops the drives      ok
   E-STOP latches and cannot be cleared by a fault clear   ok
   ADR-010 state transitions are gated                     ok
+  max-rate lever scales the tick and stays exact          ok
   segments above 2 MHz or of zero length are rejected     ok
   segment queue is exact at the full/empty boundaries     ok
 ```
@@ -222,40 +278,71 @@ Recorded because both were silent-wrong-motion bugs, not build errors.
 
 ## 7. Risks
 
-### RISK-1 — Refill CPU cost may exceed the headroom target (**principal risk**)
+### RISK-1 — Refill CPU cost at the 2 MHz ceiling
 
-Reading the generated Cortex-M4 code, the emission loop is about **25
-cycles per base tick**: ~100 M cycles/s at 4 MHz, or **~60% of a 168 MHz
-core**. That is above the 50% duty target implied by
+Reading the generated Cortex-M4 code in the linked firmware, the emission
+loop is about **29 instructions per base tick**, fully register-resident
+with a single store and no stack traffic. At the 4 MHz tick that is
+roughly **60-70% of a 168 MHz core**, above the 50% duty target implied by
 `Docs/MOTION-ENGINE.md` Rule 5 and tested by HV-04.
 
-This is instruction counting, not a measurement. It could be optimistic
-(flash wait states, bus contention) or pessimistic (the ART accelerator
-caches tight loops well, and the loop is now entirely register-resident
-with a single store per tick and no stack traffic). **HV-04 decides.**
+**This is a ceiling cost, not a running cost — but not for the reason one
+might expect.** The refill cost is proportional to the **base tick rate**,
+not to how fast the axes are commanded. At a fixed 4 MHz tick the engine
+costs the same whether an axis is running at 2 MHz or crawling at 100 Hz,
+because the per-tick work does not depend on whether an accumulator
+carries. So "the machine will not always run at 2 MHz" does not by itself
+reduce CPU load.
+
+What *does* reduce it is lowering the tick, and that is now a first-class
+API:
+
+```c
+stepgen_configure_max_rate(1000000u);   /* 1 MHz ceiling -> 2 MHz tick */
+```
+
+| Configured max rate | Base tick | Relative refill cost | Est. CPU |
+|---|---|---|---|
+| 2 MHz (project ceiling) | 4 MHz | 1.00 | ~60-70% |
+| 1 MHz | 2 MHz | 0.50 | ~30-35% |
+| 500 kHz | 1 MHz | 0.25 | ~15-18% |
+
+Only exact integer dividers of the 168 MHz timer clock are accepted, so no
+commanded feed rate ever picks up a systematic divider error. Most
+machines are limited by mechanics and microstepping well below 2 MHz; for
+those, this single call returns most of the CPU. The 2 MHz figure remains
+the *demonstrated capability* the project requires, not the operating
+point every machine has to pay for.
+
+All of the above is instruction counting, not measurement. **HV-04
+decides.** It could be optimistic (flash wait states, bus contention) or
+pessimistic (the ART accelerator caches this loop well).
+
+**A build-configuration trap, found and closed.** STM32CubeIDE's Debug
+configuration builds at `-Og`, which spilled three loop values back to the
+stack and cost ~30% more per tick than `-O2` — margin lost silently, and
+only in the configuration people actually debug with. `stepgen_core.c` now
+pins its own optimisation level (`#pragma GCC optimize ("O2")`, opt out
+with `STEPGEN_NO_OPT_PRAGMA`). Verified: 0 stack accesses in the loop in a
+full `-Og` firmware build.
 
 Two earlier formulations were rejected during Phase 1: a per-axis pass
 OR-ing into a pre-blanked buffer (~8 cycles/axis/tick, ~95% CPU), and a
-version that tracked step counts and last-step ticks per tick (spilled to
-stack, ~29 cycles/tick). The current form removes the read-modify-write,
-the blanking pass, and all per-tick bookkeeping — step counts and
-last-step ticks are computed in closed form after each run.
+version tracking step counts and last-step ticks per tick (spilled, ~29
+cycles/tick at `-O2`). The current form removes the read-modify-write, the
+blanking pass, and all per-tick bookkeeping — step counts and last-step
+ticks are computed in closed form after each run.
 
-Mitigations if HV-04 fails, in order of preference:
+Further mitigations if HV-04 still fails at a genuinely required 2 MHz:
 
 1. **Hand-written inner loop.** GCC emits `ITE CS / MOVCS / MOVCC` plus an
    `ADD LSL#1` per axis where `ADCS b, b, b` alone would do — five
-   instructions replaced by one, per axis per tick. Estimated 13–15
+   instructions replaced by one, per axis per tick. Estimated 13-15
    cycles/tick (~35% duty). Deliberately not written in Phase 1: shipping
    untested assembly in the path that drives a machine is worse than
-   shipping a measured number. §16 permits it once the measurement
-   justifies it.
-2. **Lower the base tick.** `stepgen_port_set_tick_hz()` already supports
-   it and rejects non-integer dividers. A machine whose configured
-   maximum is 1 MHz runs a 2 MHz tick at half the cost; only machines that
-   genuinely need 2 MHz pay for it.
-3. **Larger ring**, to amortise per-refill overhead — small win, and
-   SRAM2 bounds it.
+   shipping a measured number. §16 permits it once measurement justifies it.
+2. **Larger ring**, to amortise per-refill overhead — small win, and SRAM2
+   bounds it (12 KB still free there).
 
 What this risk is **not**: a threat to STEP timing. The CPU is not in the
 pulse path. A refill that is too slow is *detected* and hard-faults
@@ -336,17 +423,26 @@ Per the instruction not to resolve contradictions silently:
 |---|---|
 | Engine implemented per the frozen ADRs, modular, network-independent | Done |
 | Builds clean for host and Cortex-M4F | Done |
-| Host verification of waveform, rates, DIR timing, fault paths, state model | Done — 1131 checks |
+| Host verification of waveform, rates, DIR timing, fault paths, state model | Done — 1150 checks |
 | Hardware validation path for multi-axis STEP, 2 MHz, DIR timing, DMA/BSRR, Ethernet isolation | Done — `Docs/HARDWARE-VALIDATION.md` + on-target self-tests |
 | Documentation synchronised with implementation | Done — ADR-012, §33 |
 | Assumptions, blockers, risks reported | Done — this document |
-| **Frozen DMA path contradiction resolved** | **BLOCKED — needs your decision (§2)** |
+| Frozen DMA path contradiction resolved | Done — ADR-012 accepted, `.ioc` updated and verified (§2) |
+| Integrated into the CubeIDE project, full firmware links | Done (§3b) |
 | **2 MHz / 3-axis behaviour measured on hardware** | **NOT DONE — HV-11 is the gate** |
 | **CPU headroom measured** | **NOT DONE — HV-04; see RISK-1** |
 
 Phase 1 is complete as an implementation and verification-infrastructure
-deliverable. It is **not** complete as a compliance claim, and per
-`Docs/MOTION-ENGINE.md` Rule 8 must not be reported as one. Phase 2 can
-proceed in parallel, but the ADR-012 decision should be made before any
-hardware bring-up, because the `.ioc` currently generates a configuration
-that cannot produce STEP pulses.
+deliverable, and is now integrated into the CubeIDE project: the full
+firmware compiles and links, with the STEP ring verified in SRAM2 and the
+DMA vector verified to reach the engine.
+
+It is **not** complete as a compliance claim, and per
+`Docs/MOTION-ENGINE.md` Rule 8 must not be reported as one — the 2 MHz
+three-axis requirement is demonstrated only in host simulation. Closing
+that gap needs the board: flash the image, run
+`stepgen_selftest_run_all()` (HV-00..HV-05), then work through the HV-1x
+waveform tests.
+
+Nothing blocks Phase 2. The Ethernet work must keep its buffers in SRAM1
+and its interrupt priority numerically above 2 (§9).

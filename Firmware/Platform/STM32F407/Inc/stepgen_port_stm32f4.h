@@ -8,9 +8,14 @@
 #include <stdint.h>
 #include "stepgen_hw_map.h"
 
-/** Ring-boundary interrupt. The CubeIDE startup file must route the vector
- *  named by STEPGEN_DMA_IRQHandler here. */
-void STEPGEN_DMA_IRQHandler(void);
+/**
+ * Ring-boundary interrupt body.
+ *
+ * Must be called from the CubeMX-generated DMA2_Stream1_IRQHandler(), as
+ * the first thing it does, and that stub must then return without calling
+ * HAL_DMA_IRQHandler() - see Core/Src/stm32f4xx_it.c.
+ */
+void stepgen_dma_isr(void);
 
 /** Count of DMA transfer/FIFO errors seen. Must stay 0. */
 uint32_t stepgen_port_dma_errors(void);

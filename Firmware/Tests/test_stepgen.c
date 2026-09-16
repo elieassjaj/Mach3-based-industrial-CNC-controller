@@ -487,6 +487,52 @@ static void test_state_machine(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* 9b. Configurable max rate / base tick                               */
+/* ------------------------------------------------------------------ */
+static void test_configurable_tick(void)
+{
+    TCASE("max-rate lever scales the tick and stays exact");
+    CHECK(stepgen_init());
+
+    /* Default is the project ceiling. */
+    CHECK_EQI(stepgen_tick_hz(), STEPGEN_TICK_HZ);
+    CHECK_EQI(stepgen_max_rate_hz(), MOTION_STEP_RATE_MAX_HZ);
+
+    /* A machine that never needs 2 MHz gets the CPU back: the refill cost
+     * follows the tick, not the commanded speed. */
+    CHECK(stepgen_configure_max_rate(1000000u));
+    CHECK_EQI(stepgen_tick_hz(), 2000000u);
+    CHECK_EQI(stepgen_max_rate_hz(), 1000000u);
+
+    /* The rate clamp is tick-relative, so 2^31 now means 1 MHz, and a
+     * request above the configured maximum saturates rather than wrapping. */
+    CHECK_EQI(stepgen_rate_from_hz(1000000.0), STEPGEN_RATE_MAX_Q32);
+    CHECK_EQI(stepgen_rate_from_hz(2000000.0), STEPGEN_RATE_MAX_Q32);
+    CHECK_EQI(stepgen_rate_from_hz(500000.0),  STEPGEN_RATE_MAX_Q32 / 2);
+
+    /* Above the project ceiling is refused. */
+    CHECK(!stepgen_configure_max_rate(MOTION_STEP_RATE_MAX_HZ + 1u));
+    CHECK(!stepgen_configure_max_rate(0u));
+    CHECK_EQI(stepgen_max_rate_hz(), 1000000u);   /* unchanged by a refusal */
+
+    /* Not legal once the drives are live. */
+    CHECK(stepgen_enable_drives());
+    CHECK(!stepgen_configure_max_rate(500000u));
+    CHECK_EQI(stepgen_max_rate_hz(), 1000000u);
+
+    /* The waveform at the reduced ceiling is still one tick high, one low. */
+    sim_trace_reset(&g_sim_trace);
+    double hz[MOTION_AXIS_COUNT] = {0};
+    hz[MOTION_AXIS_Z] = 1000000.0;
+    submit(20000u, hz, 1);
+    CHECK(stepgen_start());
+    sim_port_run_ticks(20000u);
+    CHECK_EQI(count_rising(&g_sim_trace, MOTION_AXIS_Z), (20000u - GUARD) / 2u);
+    CHECK_EQI(max_high_run(&g_sim_trace, MOTION_AXIS_Z), 1u);
+    TDONE();
+}
+
+/* ------------------------------------------------------------------ */
 /* 10. Segment validation                                              */
 /* ------------------------------------------------------------------ */
 static void test_validation(void)
@@ -567,6 +613,7 @@ int main(void)
     test_underrun_is_fatal();
     test_estop_and_recovery();
     test_state_machine();
+    test_configurable_tick();
     test_validation();
     test_queue();
 
