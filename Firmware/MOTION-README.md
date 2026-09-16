@@ -1,4 +1,4 @@
-# Motion Subsystem (Phase 1)
+# Motion Subsystem > Phase 1
 
 This directory is the STM32CubeIDE project. The motion subsystem added in
 Phase 1 lives alongside the generated code in:
