@@ -61,7 +61,7 @@ M4/M5/M7/M9/M10/M3/M12 have **no** dependency on the protocol — they can be fu
 
 These are not protocol questions — they're implementation choices the documents deliberately left open (per FIRMWARE-ARCHITECTURE Rule 6/ADR pattern) that nonetheless must be picked *once*, consistently, before the modules that depend on them can be written without contradicting each other.
 
-**Status: items 1–7 are now fully resolved** (ADR-006 through ADR-011 in `Docs/FIRMWARE-ARCHITECTURE.md` §41 — see `Docs/PRE-IMPLEMENTATION-DECISIONS.md` for the full reasoning behind each, including which parts came from repository evidence versus an explicit project-owner decision). Only item 8 remains an open, low-stakes choice.
+**Status: all 8 items are now resolved** (ADR-006 through ADR-013 in `Docs/FIRMWARE-ARCHITECTURE.md` §41 — see `Docs/PRE-IMPLEMENTATION-DECISIONS.md` for the full reasoning behind each, including which parts came from repository evidence versus an explicit project-owner decision). Item 8's numeric value is confirmed; its firmware implementation (the actual pulse) is still a to-do against M12, tracked separately, not a design question.
 
 1. ~~DIR generation method~~ — **Resolved, ADR-006**: CPU-timed `GPIOD` writes with a one-tick (250 ns) guard interval; the DMA-hardware alternative remains the documented fallback.
 2. ~~Interpolation/DDA algorithm~~ — **Resolved, ADR-007**: per-axis DDA/Bresenham accumulator at the 4 MHz tick, operating entirely in step-domain; all engineering-unit conversion happens on the PC-side plugin, matching the SDK's own `ncPod` reference behavior.
@@ -70,9 +70,9 @@ These are not protocol questions — they're implementation choices the document
 5. ~~System/fault state model~~ — **Fully resolved, ADR-010**: `BOOT → INIT → SAFE_IDLE → READY ⇄ RUNNING`, `FAULT`/`EMERGENCY_STOP` distinct and always requiring explicit clear (confirmed, never auto-clear). One refinement from the project owner: `COMM_TIMEOUT`/buffer-underflow `FAULT`s hold position with `EN` still asserted rather than disabling drives — the one exception to the general "faults disable drives" rule, chosen to avoid de-energizing a stepper/servo under load merely because the link paused.
 6. ~~Relay polarity~~ — **Resolved, verified against hardware by the project owner: ACTIVE HIGH.** `Docs/PINOUT.md` updated accordingly.
 7. ~~MAC address~~ — **Fully resolved, ADR-011**: locally-administered address for bench testing; per-unit, STM32-unique-ID-derived address for production (confirmed by the project owner — no purchase, no collision risk).
-8. **`PB0`/PHY reset hardening** — still an open, low-stakes decision: add the explicit ≥100 µs low-pulse now, or defer it. Either is acceptable; it just needs to be a decision before M12 is finalized.
+8. ~~`PB0`/PHY reset hardening~~ — **Resolved, ADR-013**: the project owner confirmed an explicit ≥150 µs low-pulse on `PB0` before release, at the start of `low_level_init()`. The value is decided; the firmware change itself (a microsecond-precision delay, since `HAL_Delay()`'s 1 ms resolution is too coarse) is still a to-do against M12.
 
-Items 1–7 no longer block M4–M9/M12 from being coded.
+Items 1–8 no longer block M4–M9/M12 from being coded.
 
 ---
 

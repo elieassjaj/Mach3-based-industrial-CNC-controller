@@ -1,8 +1,8 @@
 # CNC5AX-ETH — Pre-Implementation Decision List
 
-This document is the scannable companion to the full ADRs it references. It exists to answer, for each of the eight items `Docs/FIRMWARE-IMPLEMENTATION-PLAN.md` §4 identified as needing a decision before coding starts: what the documented requirement is, what was actually undecided, which firmware modules depend on it, what default (if any) is now adopted, and — where the repository genuinely does not contain enough information to decide — that it is marked for the project owner rather than guessed.
+This document is the scannable companion to the full ADRs it references. It exists to answer, for each of the eight items `Docs/FIRMWARE-IMPLEMENTATION-PLAN.md` §4 identified as needing a decision before coding starts (items 1–8 below), and for later hardening confirmations that came out of the Phase 1 STEP-DMA correction (items 10–11 below, out of ADR-012): what the documented requirement is, what was actually undecided, which firmware modules depend on it, what default (if any) is now adopted, and — where the repository genuinely does not contain enough information to decide — that it is marked for the project owner rather than guessed.
 
-Full reasoning, alternatives considered, and risk notes for every resolved item live in `Docs/FIRMWARE-ARCHITECTURE.md` §41, ADR-006 through ADR-011. This document does not repeat that reasoning; it summarizes the outcome.
+Full reasoning, alternatives considered, and risk notes for every resolved item live in `Docs/FIRMWARE-ARCHITECTURE.md` §41, ADR-006 through ADR-013. This document does not repeat that reasoning; it summarizes the outcome.
 
 ---
 
@@ -86,7 +86,17 @@ Full reasoning, alternatives considered, and risk notes for every resolved item 
 
 ---
 
-## 8. UDP protocol dependencies
+## 8. `PB0`/PHY reset pulse hardening
+
+- **Documented requirement:** none beyond LAN8720A datasheet power-on timing (`Docs/ETHERNET.md` §2.2, `tpurstd`/`trstia`); the driver requires `nRST` released and the PHY given its reset-release time before MDIO access is attempted.
+- **What was undecided (`Docs/FIRMWARE-IMPLEMENTATION-PLAN.md` §4, item 8):** whether to add an explicit, firmware-driven low pulse on `PB0` (`PHY_NRST`, active-low) before releasing it, since the board has no RC delay or reset supervisor on `nRST` (a plain pull-up per the schematic) and `PB0` is currently only ever driven HIGH (`MX_GPIO_Init()`), relying entirely on the LAN8720A's own internal power-on reset plus `LAN8742_Init()`'s MDIO soft-reset.
+- **Depends on this:** M12 (Ethernet) — specifically `low_level_init()` in `Firmware/LWIP/Target/ethernetif.c`, which must run its reset sequence before any MDIO read.
+- **Resolved by the project owner — confirmed: explicit low pulse, ≥150 µs.** `PB0` must be driven LOW for **at least 150 µs** before being released HIGH, at the start of the PHY reset sequence (i.e., before `MX_LWIP_Init()`/`low_level_init()` performs any MDIO access). This exceeds the LAN8720A's general `trstia` reset-assertion minimum (~100 µs) with deliberate margin, and removes the dependency on the PHY's own internal power-on reset for deterministic behavior on every reset path (cold boot and warm/software reset alike), not only cold power-up. See ADR-013 (`Docs/FIRMWARE-ARCHITECTURE.md` §41) for the full reasoning and the open firmware-implementation note (a microsecond-precision delay is needed — `HAL_Delay()`'s 1 ms `SysTick` resolution is too coarse — and the reset pulse must run before `low_level_init()`'s MDIO access, which is earlier in the boot sequence than where this project's existing `DWT->CYCCNT` cycle-count utility, in `Firmware/Platform/STM32F407/Src/stepgen_port_stm32f4.c`, is currently enabled).
+- **Needs your decision:** no — value confirmed. Firmware implementation of the pulse itself is still open (tracked as a to-do against M12, not a design question).
+
+---
+
+## 9. UDP protocol dependencies
 
 No packet fields, port number, or PC-side plugin behavior are decided or invented here — this section only names what depends on the protocol, per `Docs/FIRMWARE-IMPLEMENTATION-PLAN.md` §3 and `Docs/MACH3-INTERFACE.md` §7:
 
@@ -99,3 +109,23 @@ No packet fields, port number, or PC-side plugin behavior are decided or invente
 - **PC-side Mach3 plugin behavior**, and its repository location (`Docs/MACH3-INTERFACE.md` §7 — none reserved yet) — a separate deliverable, co-designed with the protocol, not firmware.
 
 None of these block M1–M12 (everything not listed in `Docs/FIRMWARE-IMPLEMENTATION-PLAN.md` §3 as protocol-dependent) from being implemented and bench-verified first, per that document's §5 phased order.
+
+---
+
+## 10. SRAM placement of Ethernet/`lwIP` buffers
+
+- **Documented requirement:** "Ethernet processing... cannot introduce unacceptable timing variation into STEP generation" (`Docs/MOTION-ENGINE.md` §8); ADR-012's STEP-DMA correction (item 1 above) put the STEP-DMA ring in SRAM2 specifically so it never shares a bus-matrix slave port with Ethernet traffic.
+- **What was implicit but not stated as a binding rule:** that the *other* side of that isolation — every Ethernet MAC DMA descriptor/buffer and the entire `lwIP` buffer pool (zero-copy RX pbuf pool, TX descriptors, `lwIP`'s own internal heap/pools) — must stay in SRAM1, and specifically must never end up in CCM RAM.
+- **Depends on this:** M12 (Ethernet), and indirectly M4 (StepGen), since a violation here would reintroduce the exact bus-port contention ADR-012's SRAM2 split was designed to remove — or worse.
+- **Resolved — confirmed as a binding rule, elevated into ADR-012 (`Docs/FIRMWARE-ARCHITECTURE.md` §41):** Ethernet MAC DMA descriptors (`DMARxDscrTab`/`DMATxDscrTab`) and buffers, and every `lwIP` buffer/pool, **must reside in SRAM1 only** — never SRAM2 (reserved exclusively for the STEP-DMA ring, `Platform/STM32F407/linker/stepgen_sram2.ld`) and never CCM RAM. The CCM restriction is the stronger of the two reasons: RM0090 states plainly that the 64 KB CCM data RAM "is not part of the bus matrix and can be accessed only through the CPU" — no DMA master on this part, **including the Ethernet MAC's own dedicated DMA engine**, can reach CCM at all, so placing any Ethernet/`lwIP` buffer there would not be a performance risk but an outright non-functional configuration. **Verified against the current Phase 1 firmware:** `DMARxDscrTab`, `DMATxDscrTab`, and the `lwIP` `RX_POOL` memory pool (`Firmware/LWIP/Target/ethernetif.c`) are all plain static/global declarations with no section attribute, so they land in the linker's default `RAM` region — which `Firmware/STM32F407VGTX_FLASH.ld` defines as exactly SRAM1 (`ORIGIN = 0x20000000, LENGTH = 112K`), with SRAM2 and CCMRAM declared as the two separate, explicitly-carved-out regions the STEP ring and (currently unused) CCM-RAM section respectively target. No Ethernet/`lwIP` code touches `.ccmram` or `.stepgen_ram` anywhere in the repository today — the rule is already satisfied by construction, not merely by intent.
+- **Needs your decision:** no — confirmed and already satisfied. Recommended (not yet implemented) hardening: a runtime self-test symmetric to the existing HV-03 (which confirms the STEP ring lands in SRAM2) that asserts `DMARxDscrTab`/`DMATxDscrTab`/`RX_POOL` addresses fall inside the SRAM1 range, so a future regression (e.g. a well-meaning but wrong `__attribute__((section(".ccmram")))` on an Ethernet buffer) fails a test instead of failing silently on hardware.
+
+---
+
+## 11. Ethernet interrupt priority relative to the STEP-DMA interrupt
+
+- **Documented requirement:** Ethernet/networking activity must not affect STEP timing (`Docs/MOTION-ENGINE.md` §8); ADR-004's original NVIC ordering placed the STEP-DMA refill/DIR-write interrupt above Ethernet specifically for this reason.
+- **What needed re-confirming:** ADR-012 moved the STEP-DMA stream from `DMA1_Stream1` to `DMA2_Stream1` (item 1 above) — the isolation requirement is only actually enforced if the *new* interrupt, `DMA2_Stream1_IRQn`, still sits at strictly higher NVIC priority (lower preempt-priority number) than the Ethernet interrupts, not the old, no-longer-used `DMA1_Stream1_IRQn`.
+- **Depends on this:** M4 (StepGen)/M7 (DIR), whose refill-and-DIR-write ISR runs on `DMA2_Stream1_IRQn`; M12 (Ethernet), whose `ETH_IRQn`/`ETH_WKUP_IRQn` must never be able to preempt it.
+- **Resolved — confirmed as a binding rule, elevated into ADR-012 (`Docs/FIRMWARE-ARCHITECTURE.md` §41): `ETH_IRQn` and `ETH_WKUP_IRQn` must always be configured at a strictly lower NVIC preempt-priority (a numerically higher priority value) than `DMA2_Stream1_IRQn`.** **Verified against the current Phase 1 firmware:** `Firmware/Core/Src/dma.c` sets `HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 2, 0)`, and `Firmware/CNC5AX-ETH.ioc` configures `NVIC.ETH_IRQn` and `NVIC.ETH_WKUP_IRQn` both at preempt-priority `5` — `5 > 2`, so the requirement already holds in the current configuration. This preserves the full ordering carried over from ADR-004 through ADR-012: E-STOP (`EXTI2`, priority 0) above the other digital inputs (`EXTI0/1/3/4/9_5/15_10`, priority 1) above STEP-DMA (`DMA2_Stream1`, priority 2) above Ethernet (`ETH_IRQn`/`ETH_WKUP_IRQn`, priority 5).
+- **Needs your decision:** no — confirmed and already satisfied. This is now a binding invariant, not an incidental CubeMX default: any future change to either interrupt's priority (e.g. CubeMX regeneration resetting a value) must preserve `priority(ETH_IRQn), priority(ETH_WKUP_IRQn) > priority(DMA2_Stream1_IRQn)`, and should be checked against this item before being accepted.

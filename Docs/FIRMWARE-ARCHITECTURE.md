@@ -1837,6 +1837,52 @@ its zero-skew property (ADR-005), CPU-timed DIR with the two-stage
 arm/play mechanism and `g = 3` (ADR-006), direct mode with one transfer
 per request, circular with HT/TC interrupts, very-high stream priority,
 and the NVIC ordering (E-STOP 0, other inputs 1, STEP-DMA 2, Ethernet 5).
+Two consequences of this correction are elevated below from incidental
+facts into binding rules, since both are load-bearing for the "Ethernet
+must not affect STEP timing" requirement (`Docs/MOTION-ENGINE.md` §8) and
+neither survives a careless future edit (e.g. a CubeMX regeneration, or a
+new buffer declared without checking where it lands) without being stated
+explicitly:
+
+**Binding rule — Ethernet/`lwIP` buffers confined to SRAM1.** The STEP-DMA
+ring now lives in SRAM2 (`Platform/STM32F407/linker/stepgen_sram2.ld`), on
+its own bus-matrix slave port, precisely so Ethernet traffic can never
+contend with it for that port. That isolation only holds if the *other*
+side is also true: every Ethernet MAC DMA descriptor/buffer
+(`DMARxDscrTab`, `DMATxDscrTab`) and the entire `lwIP` buffer pool
+(zero-copy RX pbuf pool, TX path, `lwIP`'s own heap/pools) **must reside in
+SRAM1 only — never SRAM2, and never CCM RAM.** The CCM case is not a
+performance nuance but an outright functional impossibility: RM0090 §2.1
+states the 64 KB CCM data RAM "is not part of the bus matrix and can be
+accessed only through the CPU" — **no DMA master on this part, including
+the Ethernet MAC's own dedicated DMA engine, can reach CCM at all.**
+Verified against the current Phase 1 firmware: `DMARxDscrTab`,
+`DMATxDscrTab`, and the `lwIP` `RX_POOL` pool
+(`Firmware/LWIP/Target/ethernetif.c`) are plain static/global declarations
+with no section attribute, so they land in the linker's default `RAM`
+region, which `STM32F407VGTX_FLASH.ld` defines as exactly SRAM1
+(`ORIGIN = 0x20000000, LENGTH = 112K`) — SRAM2 and CCMRAM are separate,
+explicitly-carved-out regions that no Ethernet/`lwIP` code references
+anywhere in the repository today. The rule holds by construction, not
+merely by intent; see `Docs/PRE-IMPLEMENTATION-DECISIONS.md` item 10 for
+the recommended (not yet implemented) HV-03-style runtime check that would
+catch a future regression.
+
+**Binding rule — Ethernet interrupt priority strictly below `DMA2_Stream1`.**
+The isolation the NVIC ordering above is meant to provide only actually
+holds for the *current* STEP-DMA interrupt, `DMA2_Stream1_IRQn` — not the
+old, no-longer-used `DMA1_Stream1_IRQn` this ADR replaces. **`ETH_IRQn` and
+`ETH_WKUP_IRQn` must always be configured at a strictly lower NVIC
+preempt-priority (a numerically higher value) than `DMA2_Stream1_IRQn`,**
+so that Ethernet RX/TX servicing can never preempt a STEP-DMA
+refill/DIR-write in progress. Verified against the current Phase 1
+firmware: `Firmware/Core/Src/dma.c` sets
+`HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 2, 0)`, and
+`Firmware/CNC5AX-ETH.ioc` configures both `NVIC.ETH_IRQn` and
+`NVIC.ETH_WKUP_IRQn` at preempt-priority `5` (`5 > 2`) — the requirement
+already holds. See `Docs/PRE-IMPLEMENTATION-DECISIONS.md` item 11; any
+future change to either priority (including an unreviewed CubeMX
+regeneration) must preserve this ordering before being accepted.
 
 **What ADR-005's reasoning loses, and what it does not.** ADR-005's
 "frees `DMA1_Stream7` for a future DIR-DMA path" no longer applies, since
@@ -1884,6 +1930,77 @@ instances differ.
 **Validation result:** Documentation analysis complete and corroborated by
 CubeMX's own channel assignment; the integrated firmware builds and links.
 On-silicon confirmation NOT RUN — pending hardware (HV-00).
+
+---
+
+### ADR-013 — PHY Reset Pulse Width (`PB0`/`PHY_NRST`)
+
+**Decision:** `PB0` (`PHY_NRST`, active-low, per `Docs/PINOUT.md`) must be
+explicitly driven **LOW for at least 150 µs**, then released HIGH, at the
+start of the PHY reset sequence — before `low_level_init()`
+(`Firmware/LWIP/Target/ethernetif.c`) performs any MDIO access. This
+resolves `Docs/FIRMWARE-IMPLEMENTATION-PLAN.md` §4 item 8, the one item of
+the original eight left open pending a project-owner call
+(`Docs/PRE-IMPLEMENTATION-DECISIONS.md` item 8).
+
+**Reason:**
+- The current firmware only ever drives `PB0` HIGH (`MX_GPIO_Init()`) and
+  never actively pulses it LOW, per `Docs/ETHERNET.md` §2.2's own
+  power-on-timing note. The board has no RC delay or reset supervisor on
+  `nRST` — only a plain pull-up (per the schematic) — so a deterministic
+  reset today depends entirely on the LAN8720A's internal power-on reset
+  plus `LAN8742_Init()`'s MDIO soft-reset (`BCR` bit 15). That is
+  sufficient at cold power-up in practice, but is not a controlled,
+  firmware-owned reset on every reset path (e.g. a warm/software MCU
+  reset that does not re-power the PHY).
+- **150 µs is the project owner's confirmed value**, chosen with explicit
+  margin over the LAN8720A datasheet's general `trstia` reset-assertion
+  minimum (~100 µs) — the same figure `Docs/ETHERNET.md` §2.2 had already
+  flagged as a "small, contained firmware change, not an architectural
+  one." This ADR adopts the confirmed number; it does not change the
+  underlying mechanism §2.2 already proposed.
+
+**Implementation note (not yet done — tracked in
+`Docs/PRE-IMPLEMENTATION-DECISIONS.md` item 8):** `HAL_Delay()`'s 1 ms
+`SysTick` resolution cannot express a 150 µs pulse. This project already
+has a `DWT->CYCCNT`-based cycle-accurate busy-wait pattern
+(`Firmware/Platform/STM32F407/Src/stepgen_selftest_stm32f4.c`,
+`while ((DWT->CYCCNT - t0) < n) { __NOP(); }`), but its DWT enablement
+currently happens inside the stepgen port's own init, which runs later in
+`main()` than `MX_GPIO_Init()`/`MX_LWIP_Init()`. Implementing this pulse
+therefore needs either enabling the DWT cycle counter earlier (before the
+PHY reset sequence) or an equivalent independent microsecond-delay
+primitive — an implementation detail for M12, not fixed by this ADR.
+
+**Alternatives considered:**
+- *Leave `PB0` permanently HIGH (status quo)* — not adopted: works today
+  only because the LAN8720A's internal POR happens to cover cold
+  power-up; not a firmware-owned guarantee, and silently relies on PHY
+  behavior this project does not control.
+- *Use the general `trstia` minimum (~100 µs) with no added margin* — not
+  adopted: the project owner confirmed 150 µs specifically for margin
+  beyond the datasheet floor, consistent with this project's general
+  preference for margin over operating at a spec's exact minimum
+  (`Docs/MOTION-ENGINE.md` §7's DIR setup/hold margin note makes the same
+  choice).
+
+**Timing impact:** A one-time, boot-path-only 150 µs busy-wait before
+Ethernet init; no impact on STEP/DIR timing (unrelated subsystem, and
+occurs before the motion engine's timebase starts).
+
+**Memory impact:** None.
+
+**CPU impact:** Negligible — a single blocking delay executed once per
+boot/reset, not in any real-time path.
+
+**Risks:** None identified beyond the open implementation detail above
+(which delay primitive to use before the DWT counter's normal
+enablement point).
+
+**Validation result:** TBD — pending the firmware change described above
+and confirmation on real hardware that the pulse is actually ≥150 µs
+(oscilloscope/logic analyzer on `PB0`) and that PHY link-up still succeeds
+on every reset path, not only cold power-up.
 
 # 42. AI-Assisted Development Rules
 
