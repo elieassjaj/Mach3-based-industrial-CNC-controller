@@ -614,7 +614,7 @@ Host PC (Mach3):
 
 **MAC address:** fully resolved — see ADR-011 in `Docs/FIRMWARE-ARCHITECTURE.md` §41. Bench testing uses a locally-administered address, replacing the CubeMX placeholder (`00:80:E1:00:00:00` in `ethernetif.c`, a real vendor's OUI that was never this project's to use). Production units derive their address per-unit from the STM32F407's factory-programmed 96-bit unique device ID (confirmed by the project owner) — no purchase, no fixed shared address, no collision risk across units.
 
-**UDP port:** still `[TBD]` — depends on the application protocol design, not on the IP layer. Tracked in `Docs/MACH3-INTERFACE.md` §7.
+**UDP port:** `[FW-CONFIRMED]` **55010**, decided in ADR-014 and defined once in `Firmware/Net/Inc/net_config.h`. See `Docs/PROTOCOL.md` §2 for the reasoning.
 
 The PC-side IP address (`192.168.5.100`) must be configured in Windows' network adapter settings for whichever NIC is physically connected to the controller; this is a host-side/plugin concern, not something the firmware can set.
 
@@ -1351,20 +1351,20 @@ The following items must be explicitly verified before being treated as implemen
 | LwIP version | `[FW-CONFIRMED]` v2.1.2_Cube |
 | RAW API usage in final firmware | `[FW-CONFIRMED]` `NO_SYS=1`, `LWIP_NETCONN=0`, `LWIP_SOCKET=0` in `lwipopts.h` |
 | Static IP values | `[FW-CONFIRMED]` Controller `192.168.5.10`, PC `192.168.5.100`, mask `255.255.255.0`, no gateway — see Section 15 |
-| UDP port | `[TBD]` |
-| UDP packet format | `[TBD]` |
+| UDP port | **55010** — ADR-014 |
+| UDP packet format | **Resolved** — `Docs/PROTOCOL.md` |
 | Host-side Mach integration | `[TBD]` |
 | Host-side LinuxCNC integration | `[TBD]` |
-| Communication update rate | `[TBD]` |
-| 1 kHz target | `[PROJECT-TARGET / TBD]` |
+| Communication update rate | **~50 Hz status, host-paced motion** — `Docs/PROTOCOL.md` §8 |
+| 1 kHz target | **Superseded** — both reference devices buffer deeply at ~50 Hz instead; `Docs/PROTOCOL.md` §8 |
 | RX/TX DMA buffer architecture | `[TBD]` |
 | Zero-copy operation | `[TBD]` |
 | LwIP memory configuration | `[TBD]` |
-| Packet sequence mechanism | `[TBD]` |
-| CRC/checksum | `[TBD]` |
-| Feedback packet format | `[TBD]` |
+| Packet sequence mechanism | **Resolved** — two spaces, `seq` and `block_seq`; `Docs/PROTOCOL.md` §4.4, §5.2 |
+| CRC/checksum | **Resolved** — IEEE 802.3 CRC-32 over header+payload |
+| Feedback packet format | **Resolved** — 96-byte `STATUS`; `Docs/PROTOCOL.md` §6 |
 | Watchdog | `[TBD]` |
-| Ethernet emergency-stop protocol | `[TBD]` |
+| Ethernet emergency-stop protocol | **Resolved by exclusion** — there is none. The network cannot E-stop; a dead link is a `COMM_TIMEOUT` fault that holds position with the drives live (`Docs/PROTOCOL.md` §7.4) |
 | Ethernet firmware update | `[TBD]` |
 
 ---
@@ -1383,12 +1383,12 @@ The following items must be explicitly verified before being treated as implemen
 | LwIP API | `[FW-CONFIRMED]` RAW API |
 | IP Configuration | `[FW-CONFIRMED]` Static IPv4 — `192.168.5.10` / `255.255.255.0`, no gateway |
 | Ethernet Transfer | `[HW-CONFIRMED]` DMA capable |
-| Motion Protocol | `[TBD]` UDP-based application protocol |
+| Motion Protocol | **C5P1 v1** on UDP 55010 — `Docs/PROTOCOL.md` |
 | Host Integration | `[TBD]` Mach / LinuxCNC / custom host |
-| Network Update Rate | `[TBD]` |
+| Network Update Rate | Status 50 Hz; motion host-paced, 128 ms blocks recommended |
 | Motion Timing | `[PROJECT-DECISION]` Must remain deterministic |
 | CoreXY | `no` |
-| Feedback Protocol | `[TBD]` |
+| Feedback Protocol | 96-byte `STATUS` packet |
 
 ---
 

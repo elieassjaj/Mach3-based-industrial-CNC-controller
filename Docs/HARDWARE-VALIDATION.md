@@ -381,6 +381,93 @@ known — record it here when it is.
 
 ---
 
+## 5c. Protocol tests (HV-3x) — Phase 3 / M13-M14
+
+These need the board, a PC on `192.168.5.100`, and `Tools/c5p1.py`. No
+Mach3 and no plugin: the point of Phase 3 is that the firmware's protocol
+is testable on its own.
+
+### HV-30 — The device answers on the wire
+
+*Method.* `./c5p1.py info`
+
+*Pass.* An `INFO` packet comes back with `proto_version` 1, `axis_count` 5,
+`tick_hz` 4000000, and the MAC and IP matching `net_config.h`. This is the
+first proof that a C5P1 packet survives a real Ethernet round trip — the
+host suite establishes the format, not the transport.
+
+*Also confirm the device stays silent until spoken to.* Run
+`./c5p1.py watch` in one terminal before ever sending a packet: nothing
+should arrive. A device that transmits unprompted has lost its endpoint
+learning.
+
+### HV-31 — Corrupt packets draw no reply
+
+*Method.* `./c5p1.py raw --corrupt crc`, then `--corrupt magic`,
+`--corrupt version`, `--corrupt length`, `--corrupt opcode`.
+
+*Pass.* The tool reports that the device stayed silent in every case, and
+the following status shows `rx_dropped` incremented once per attempt while
+`rx_accepted` is unchanged. The tool exits non-zero if the device replies,
+which it must not: with a failed CRC the sequence number is untrustworthy
+too.
+
+### HV-32 — Status cadence and comm timeout
+
+*Method.* `./c5p1.py watch`, then stop the tool mid-program.
+
+*Pass.* Status arrives at ~50 Hz (20 ms). After the tool stops, with motion
+active, `proto_faults` shows `COMM_TIMEOUT` within ~200 ms and `state`
+becomes `READY`. Confirm with a meter on `PD15` that **`EN` stays
+asserted** — ADR-010 requires a broken link to hold position with the
+drives live, not to drop them.
+
+*This is the test that proves the network cannot cause an E-stop.* `state`
+must never be `EMERGENCY_STOP` as a result of a dead link.
+
+### HV-33 — A real move, end to end
+
+*Method.* Drives disconnected first. `./c5p1.py enable`, `./c5p1.py start`,
+then `./c5p1.py move --axis X --steps 2000 --seconds 2`, with a scope or
+counter on `PA8`.
+
+*Pass.* 2000 pulses ±1 at ~1 kHz (Docs/PROTOCOL.md §5.3: never more than
+commanded, at most one step behind), `pos_output[0]` in the final status
+agrees, and `queue_free` visibly dips and recovers during the stream.
+
+### HV-34 — Backpressure under a real burst
+
+*Method.* Stream faster than the machine consumes — a long `move` with a
+short `--seconds` — and watch `queue_free`.
+
+*Pass.* The device refuses blocks with `reject = queue full` rather than
+dropping them, the tool's retry loop re-sends the **same** `block_seq`, and
+no motion is lost or duplicated: the final `pos_output` equals the
+commanded total to within one step.
+
+### HV-35 — A lost block stops the machine
+
+*Method.* This one needs a deliberate gap. Easiest is a small edit to the
+tool's `block_seq` handling, or a firewall rule dropping one datagram.
+
+*Pass.* `proto_faults` shows `SEQ_GAP`, motion stops, `EN` stays asserted,
+and **no further motion is executed until `CONTROL:CLEAR_FAULT`** — sending
+the missing block afterwards must not clear it by itself.
+
+### HV-36 — Motion timing is unaffected by protocol traffic
+
+The protocol-layer counterpart to HV-15, and the reason both exist.
+
+*Method.* Run HV-11's three-axis 2 MHz stimulus while streaming motion
+blocks and flooding the link with unrelated traffic.
+
+*Pass.* STEP timing on the scope is indistinguishable from HV-11 with a
+quiet link. Decoding a 32-record block is bounded work at NVIC priority 5,
+strictly below the STEP-DMA vector at 2 (ADR-012), so this should hold —
+but "should" is the word HV tests exist to replace.
+
+---
+
 ## 6. Results table
 
 `NOT RUN` is the correct entry until hardware exists. It must not be
@@ -409,13 +496,20 @@ replaced by an expectation.
 | HV-23 MAC address | NOT RUN | — | — | ADR-011; expect `02:00:05:10:00:01` |
 | HV-24 Static IP / no DHCP | NOT RUN | — | — | Guards the b409ba5 regression |
 | HV-25 Link 100M full duplex | NOT RUN | — | — | Needs a cable; not part of the verdict |
+| HV-30 Device answers on the wire | NOT RUN | — | — | First real C5P1 round trip |
+| HV-31 Corrupt packets draw no reply | NOT RUN | — | — | |
+| HV-32 Status cadence / comm timeout | NOT RUN | — | — | **Proves the network cannot E-stop** |
+| HV-33 A real move, end to end | NOT RUN | — | — | |
+| HV-34 Backpressure under a burst | NOT RUN | — | — | |
+| HV-35 A lost block stops the machine | NOT RUN | — | — | |
+| HV-36 Timing unaffected by protocol traffic | NOT RUN | — | — | Protocol-layer counterpart to HV-15 |
 
 ---
 
 ## 7. What the host test suite already establishes
 
-`cd Firmware && make test` — 1150 motion checks and 130 network checks,
-all passing at the time of writing. The motion suite reconstructs the pin
+`cd Firmware && make test` — 1150 motion checks, 130 network checks and
+302 protocol checks, all passing at the time of writing. The motion suite reconstructs the pin
 waveform from the BSRR word stream and the CPU-timed DIR writes, then
 measures it in nanoseconds, so it checks the same properties HV-1x will.
 
@@ -425,6 +519,12 @@ a speed on a down link, and that the configuration constants still hold
 the values the documents fix and still satisfy ADR-011/012/013's
 invariants. It establishes **nothing** about the PHY, the MAC, the reset
 pulse or the wire — those are HV-20..HV-25, and they need the board.
+
+The protocol suite (`make test-proto`) drives the session against the real
+motion engine on its simulation port, so backpressure, abort and the
+sequence rules are exercised against the real queue rather than a mock, and
+a motion packet's step count is checked by counting emitted pulses. It
+establishes nothing about UDP, lwIP or the wire — that is HV-30..HV-36.
 
 | Property | Host result |
 |---|---|

@@ -32,8 +32,8 @@ Module boundaries below follow the logical decomposition already fixed in `Docs/
 | M10 | `IO/Spindle` | Spindle PWM duty control over the already-configured `TIM3_CH1`/`PB4`, 10 kHz | PINOUT.md, ADR (TIM3 PSC 83/ARR 99 confirmed in `.ioc`) |
 | M11 | `IO/DigitalInput` | Expose the non-E-STOP `PE0/1/3–14` states in a form the protocol layer / Mach3 signal table can consume | MACH3-INTERFACE.md §4 (`GetInputs()`/`Engine->InSigs[]` reference behavior) |
 | M12 | `Communication/Ethernet` | Own PHY/link bring-up (LAN8742-compatible driver already wired), static IP (`192.168.5.10/24`, confirmed), `MX_LWIP_Process()` pump (already called from `main()`) | Docs/ETHERNET.md §2.2, §15–16 |
-| M13 | `Communication/UDP` | Open/bind the motion UDP socket, send/receive datagrams | **Blocked** — needs port number (`Docs/MACH3-INTERFACE.md` §7) |
-| M14 | `Communication/Protocol` | Parse/validate inbound packets into internal motion commands; encode outbound status/feedback | **Blocked** — needs packet format (`Docs/ETHERNET.md` §11, `Docs/MACH3-INTERFACE.md` §7) |
+| M13 | `Communication/UDP` | Open/bind the motion UDP socket, send/receive datagrams | **Implemented (Phase 3)** — `Platform/STM32F407/Src/net_udp_stm32f4.c`, UDP 55010 (ADR-014) |
+| M14 | `Communication/Protocol` | Parse/validate inbound packets into internal motion commands; encode outbound status/feedback | **Implemented (Phase 3)** — `Net/Src/cnc_protocol.c` + `Net/Src/cnc_session.c`; format in `Docs/PROTOCOL.md` |
 | M15 | `System/Diagnostics` | Low-overhead, disableable instrumentation (counters, state exposure via SWD) | FIRMWARE-ARCHITECTURE §29–30 — explicitly "not required" to be a full subsystem; grows incrementally alongside the others rather than being a discrete build phase |
 
 `Core/`, `Drivers/`, `LWIP/App`+`LWIP/Target`, and `Middlewares/` already exist (CubeMX-generated) and are not new modules — M4/M9/M10/M12 are the thin application layers that sit on top of what's already initialized there.
@@ -41,6 +41,8 @@ Module boundaries below follow the logical decomposition already fixed in `Docs/
 ---
 
 ## 3. Parts that depend on the still-open Mach3 UDP protocol
+
+> **Phase 3 closed this section's central dependency.** The protocol is specified in `Docs/PROTOCOL.md` and implemented: port number, packet format, motion encoding, feedback format, backpressure mechanism and comm-timeout threshold are all decided (ADR-014). M13 and M14 are built and host-tested. What remains open below is what depends on *other* missing modules — M3 for inputs, M9/M10 for outputs — and the plugin itself, not on the protocol.
 
 Everything else in this plan can be implemented and bench-tested without Mach3 or a PC. These cannot:
 

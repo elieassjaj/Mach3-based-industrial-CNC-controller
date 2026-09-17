@@ -14,7 +14,9 @@ MOTION_SRC := Motion/Src/stepgen_core.c \
               Motion/Src/motion_segment_queue.c
 
 NET_INC    := -INet/Inc
-NET_SRC    := Net/Src/net_link.c
+NET_SRC    := Net/Src/net_link.c \
+              Net/Src/cnc_protocol.c \
+              Net/Src/cnc_session.c
 
 WARN := -Wall -Wextra -Werror -Wshadow -Wconversion -Wsign-conversion \
         -Wpointer-arith -Wstrict-prototypes -Wmissing-prototypes \
@@ -29,7 +31,7 @@ HOST_SRC   := $(MOTION_SRC) \
               Platform/Host/Src/sim_trace.c
 HOST_FLAGS := -std=c11 -O2 -g $(WARN) $(HOST_INC)
 
-.PHONY: all test test-motion test-net bench arm clean
+.PHONY: all test test-motion test-net test-proto bench arm clean
 
 all: test bench arm
 
@@ -39,16 +41,28 @@ $(BUILD):
 $(BUILD)/test_stepgen: $(HOST_SRC) Tests/test_stepgen.c | $(BUILD)
 	$(HOST_CC) $(HOST_FLAGS) $^ -o $@
 
-$(BUILD)/test_net_link: $(NET_SRC) Tests/test_net_link.c | $(BUILD)
+# net_link.c alone - the link observer has no motion dependency, and
+# keeping this target narrow means a break there cannot hide behind the
+# motion engine failing to link.
+$(BUILD)/test_net_link: Net/Src/net_link.c Tests/test_net_link.c | $(BUILD)
 	$(HOST_CC) -std=c11 -O2 -g $(WARN) $(NET_INC) -ITests $^ -o $@
 
-test: test-motion test-net
+# The protocol suite drives the session against the REAL motion engine on
+# its simulation port, so backpressure and abort are exercised against the
+# real queue rather than a mock.
+$(BUILD)/test_protocol: $(NET_SRC) $(HOST_SRC) Tests/test_protocol.c | $(BUILD)
+	$(HOST_CC) $(HOST_FLAGS) $(NET_INC) $^ -o $@
+
+test: test-motion test-net test-proto
 
 test-motion: $(BUILD)/test_stepgen
 	@./$(BUILD)/test_stepgen
 
 test-net: $(BUILD)/test_net_link
 	@./$(BUILD)/test_net_link
+
+test-proto: $(BUILD)/test_protocol
+	@./$(BUILD)/test_protocol
 
 bench: $(BUILD)/bench_fill
 	@./$(BUILD)/bench_fill
@@ -74,7 +88,8 @@ ARM_SRC   := $(MOTION_SRC) \
              $(NET_SRC) \
              Platform/STM32F407/Src/net_port_stm32f4.c \
              Platform/STM32F407/Src/net_glue_stm32f4.c \
-             Platform/STM32F407/Src/net_selftest_stm32f4.c
+             Platform/STM32F407/Src/net_selftest_stm32f4.c \
+             Platform/STM32F407/Src/net_udp_stm32f4.c
 ARM_FLAGS := -std=c11 -O2 -g -mcpu=cortex-m4 -mthumb \
              -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
              -ffunction-sections -fdata-sections \
@@ -133,7 +148,8 @@ FW_SRC_OURS   := $(MOTION_SRC) $(NET_SRC) \
                  Platform/STM32F407/Src/stepgen_selftest_stm32f4.c \
                  Platform/STM32F407/Src/net_port_stm32f4.c \
                  Platform/STM32F407/Src/net_glue_stm32f4.c \
-                 Platform/STM32F407/Src/net_selftest_stm32f4.c
+                 Platform/STM32F407/Src/net_selftest_stm32f4.c \
+                 Platform/STM32F407/Src/net_udp_stm32f4.c
 
 FW_SRC_VENDOR := $(wildcard Core/Src/*.c) \
                  $(wildcard Drivers/STM32F4xx_HAL_Driver/Src/*.c) \

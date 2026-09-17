@@ -1,31 +1,40 @@
-# Network Subsystem (Phase 2 / M12)
+# Network Subsystem (Phase 2 / M12, Phase 3 / M13-M14)
 
-The Ethernet side of the STM32CubeIDE project. Phase 2 covers PHY reset,
-link bring-up, static addressing and link state. **No UDP and no protocol** —
-those are M13/M14 and are still blocked on the port number and packet
-format (`Docs/FIRMWARE-IMPLEMENTATION-PLAN.md` §3).
+The Ethernet side of the STM32CubeIDE project: PHY reset, link bring-up,
+static addressing and link state (Phase 2), plus the C5P1 motion protocol
+over UDP (Phase 3).
 
 ```text
-Net/Inc/net_config.h           AUTHORITATIVE: IP, MAC, PHY timing, priorities
-Net/                           portable link observer - no STM32/HAL/lwIP
-Platform/STM32F407/            ADR-013 reset pulse, glue, self-tests
-Tests/test_net_link.c          host verification
+Net/Inc/net_config.h           AUTHORITATIVE: IP, MAC, UDP port, PHY timing,
+                               interrupt priorities
+Net/Inc/cnc_protocol.h         C5P1 wire format - Docs/PROTOCOL.md in code
+Net/Src/cnc_session.c          sequence rules, dispatch, supervision
+Net/                           portable throughout - no STM32/HAL/lwIP
+Platform/STM32F407/            ADR-013 reset pulse, lwIP UDP binding,
+                               glue, self-tests
+Tests/test_net_link.c          host verification - link observer
+Tests/test_protocol.c          host verification - protocol, against the
+                               real motion engine
+../../Tools/c5p1.py            PC-side client: drive the board without Mach3
 ```
 
-`Net/` has no hardware or lwIP dependency, so the link state machine is
-tested on a host and Phase 3 can read link state without including
-`lwip.h`.
+The protocol layer reaches the motion engine only through `stepgen.h`, and
+`Net/` has no hardware or lwIP dependency, so every protocol rule is tested
+on a host.
 
-See `../Docs/PHASE2-STATUS.md` for results, assumptions and blockers, and
-`../Docs/HARDWARE-VALIDATION.md` (HV-20..HV-25) for the bring-up procedure.
+See `../Docs/PHASE2-STATUS.md` and `../Docs/PHASE3-STATUS.md` for results,
+assumptions and blockers; `../Docs/PROTOCOL.md` for the wire format; and
+`../Docs/HARDWARE-VALIDATION.md` (HV-20..HV-25, HV-30..HV-36) for the
+bring-up procedure.
 
 ---
 
 ## Building
 
 ```sh
-make test       host verification - motion (1150) + network (130)
-make test-net   the network suite alone
+make test       host verification - motion (1150) + network (130) + protocol (302)
+make test-net   the link-observer suite alone
+make test-proto the protocol suite alone
 make arm        cross-compile both subsystems for Cortex-M4F
 make firmware   whole-image verification build, generated files included
 ```
@@ -98,8 +107,36 @@ auto-negotiation problem, and it looks nothing like a link that simply
 never came up.
 
 Note that link-down is **not** ADR-010's `COMM_TIMEOUT`. That fault is a
-protocol-level timeout and belongs to Phase 3; this module reports the
-physical layer only.
+protocol-level timeout, reported in `STATUS.proto_faults`; this module
+reports the physical layer only.
+
+---
+
+## Driving the board without Mach3
+
+`../Tools/c5p1.py` speaks C5P1 from a plain PC — no Mach3, no plugin, no
+third-party Python packages. Set the PC NIC to `192.168.5.100/24` first.
+
+```sh
+./c5p1.py info                                   # HELLO -> INFO
+./c5p1.py watch                                  # follow the status stream
+./c5p1.py enable && ./c5p1.py start
+./c5p1.py move --axis X --steps 2000 --seconds 2
+./c5p1.py stop
+./c5p1.py raw --corrupt crc                      # device must stay silent
+```
+
+`move` and `stream` command real motion — run them with the drives
+disconnected until the machine is trusted.
+
+The device is passive: it transmits nothing until it receives a valid
+packet, so every session starts with a `HELLO`. If nothing comes back, that
+is the expected behaviour of a device that has not heard anything valid,
+not necessarily a dead link.
+
+The tool is also a working reference decoder for the wire format. Whoever
+writes the Mach3 plugin should read it alongside `../Docs/PROTOCOL.md`
+rather than re-deriving the framing.
 
 ---
 
@@ -113,6 +150,8 @@ physical layer only.
 - Record the PHY address that HV-25 reports. The LAN8720A strap allows 0
   or 1 and this repository's sources disagree about which the module uses,
   so the actual value is genuinely unknown until the board runs.
-- Then run **HV-15** from `../Docs/HARDWARE-VALIDATION.md` — motion timing
-  under Ethernet load. It is the test the project's central rule actually
-  rests on, and Phase 2 is what finally makes it runnable.
+- Then run **HV-15** and **HV-36** from `../Docs/HARDWARE-VALIDATION.md` —
+  motion timing under Ethernet load, and under real protocol traffic. They
+  are the tests the project's central rule actually rests on.
+- For the protocol itself, `../Tools/c5p1.py info` is the first thing to
+  try: it is the first proof a C5P1 packet survives a real round trip.

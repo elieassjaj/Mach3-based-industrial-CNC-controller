@@ -116,7 +116,9 @@ Mach3-based-industrial-CNC-controller/
 │   ├── MOTION-ENGINE.md
 │   ├── PHASE1-STATUS.md
 │   ├── PHASE2-STATUS.md
+│   ├── PHASE3-STATUS.md
 │   ├── PINOUT.md
+│   ├── PROTOCOL.md
 │   ├── PRE-IMPLEMENTATION-DECISIONS.md
 │   └── SYSTEM-ARCHITECTURE.md
 │
@@ -134,7 +136,8 @@ Mach3-based-industrial-CNC-controller/
 │   │   └── Target/                 ethernetif.c, lwipopts.h
 │   ├── Middlewares/Third_Party/LwIP/
 │   ├── Motion/                     portable STEP/DIR engine (Phase 1)
-│   ├── Net/                        portable network config + link observer (Phase 2)
+│   ├── Net/                        portable network config, link observer,
+│   │                               C5P1 protocol (Phases 2-3)
 │   ├── Platform/
 │   │   ├── STM32F407/              hardware ports and on-target self-tests
 │   │   └── Host/                   simulation port for the host test suite
@@ -145,6 +148,9 @@ Mach3-based-industrial-CNC-controller/
 │   ├── STM32F407VGTX_FLASH.ld
 │   ├── STM32F407VGTX_RAM.ld
 │   └── .project, .cproject, .mxproject, .settings/
+│
+├── Tools/
+│   └── c5p1.py                     PC-side protocol client (no Mach3 needed)
 │
 ├── LAN8720A/
 │   ├── LAN8720
@@ -185,6 +191,8 @@ Mach3-based-industrial-CNC-controller/
 | [`Docs/HARDWARE-VALIDATION.md`](Docs/HARDWARE-VALIDATION.md) | Procedure for measuring the motion requirements on real hardware |
 | [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) | Phase 1 (motion engine) results, assumptions, blockers and open risks |
 | [`Docs/PHASE2-STATUS.md`](Docs/PHASE2-STATUS.md) | Phase 2 (Ethernet/LwIP) results, the reverted-static-IP finding, assumptions and risks |
+| [`Docs/PHASE3-STATUS.md`](Docs/PHASE3-STATUS.md) | Phase 3 (UDP + protocol) results, decisions, risks and what Phase 4 must know |
+| [`Docs/PROTOCOL.md`](Docs/PROTOCOL.md) | **Authoritative C5P1 wire format**: framing, opcodes, motion encoding, sequencing, flow control, status |
 | [`Docs/MACH3-INTERFACE.md`](Docs/MACH3-INTERFACE.md) | How Mach3 drives an external motion device, established from the SDK |
 | [`Docs/FIRMWARE-IMPLEMENTATION-PLAN.md`](Docs/FIRMWARE-IMPLEMENTATION-PLAN.md) | Firmware module breakdown, protocol dependencies, frozen-assumption list, implementation/verification order |
 | [`Docs/PRE-IMPLEMENTATION-DECISIONS.md`](Docs/PRE-IMPLEMENTATION-DECISIONS.md) | Per-item decision list: requirement, what was undecided, dependents, resolution or explicit open question |
@@ -214,10 +222,11 @@ Mach3-based-industrial-CNC-controller/
 |---|---|---|
 | 1 | Motion engine — STEP/DIR generation (`Motion/`, `Platform/STM32F407/`) | Implemented, 1150 host checks, integrated and linking. **Not hardware-validated** — see [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) |
 | 2 | Ethernet/LwIP bring-up, M12 (`Net/`, `Platform/STM32F407/`) | Implemented, 130 host checks, whole firmware links. **No link has been established on real hardware** — see [`Docs/PHASE2-STATUS.md`](Docs/PHASE2-STATUS.md) |
+| 3 | UDP + motion protocol, M13/M14 (`Net/`, `Tools/c5p1.py`) | Implemented, 302 host checks. **No datagram has crossed real Ethernet** — see [`Docs/PHASE3-STATUS.md`](Docs/PHASE3-STATUS.md) |
 
 Neither phase may be reported as compliant with any requirement it has not measured on the board; both are gated on the prototype PCB. `Firmware/MOTION-README.md` and `Firmware/NET-README.md` cover building and the CubeIDE project settings each subsystem needs.
 
-Still unwritten: the UDP socket layer (M13), the protocol layer (M14) and the Mach3 host plugin — all blocked on the packet format and port number (`Docs/FIRMWARE-IMPLEMENTATION-PLAN.md` §3), which are decisions rather than code.
+Still unwritten: the Mach3 host plugin (Phase 4), the input manager (M3) and the output/spindle modules (M9/M10). The protocol those need is now specified and implemented — [`Docs/PROTOCOL.md`](Docs/PROTOCOL.md) — and `Tools/c5p1.py` drives the controller from a PC without Mach3.
 
 ### What the generated configuration establishes
 
@@ -437,8 +446,9 @@ This repository is intended to be developed with AI assistance. The following ru
 | Motion hardware validation plan | **Written** — [`Docs/HARDWARE-VALIDATION.md`](Docs/HARDWARE-VALIDATION.md), plus on-target self-tests HV-00..HV-05 |
 | On-target self-tests | Implemented — HV-00..HV-05 (motion) and HV-20..HV-25 (network); **not yet run** (no hardware available) |
 | Measured CPU headroom | **Not measured** — estimated ~60-70% duty at the 2 MHz ceiling; scales down with `stepgen_configure_max_rate()` (1 MHz ceiling ≈ half). HV-04 is the gate. See RISK-1 in [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) |
-| Mach3 host-side plugin | Not started |
-| Final UDP application protocol | TBD — the gate for M13/M14 and the Mach3 plugin |
+| Mach3 host-side plugin | Not started. Its obligations are recorded in [`Docs/MACH3-INTERFACE.md`](Docs/MACH3-INTERFACE.md) §8 |
+| Final UDP application protocol | **C5P1 v1 on UDP 55010** — specified in [`Docs/PROTOCOL.md`](Docs/PROTOCOL.md), implemented and host-tested (ADR-014) |
+| PC-side test client | `Tools/c5p1.py` — drives the controller without Mach3; verified byte-for-byte against the firmware codec |
 | Verified 3-axis @ 2 MHz performance | **Not validated** — requires HV-11 on real hardware; explicitly not claimed |
 | Motion timing under Ethernet load | **Not validated** — HV-15, the empirical form of the project's central rule. Runnable now that Phase 2 exists; needs the board |
 | Production-ready firmware | Not yet complete |

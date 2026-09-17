@@ -2030,6 +2030,104 @@ oscilloscope capture of `PB0` confirming the pulse width, and PHY link-up
 on every reset path — warm/software MCU reset included, which is the case
 the status quo never covered.
 
+### ADR-014 — Motion Protocol v1 (`C5P1`) over UDP
+
+**Status:** ACCEPTED for Phase 3. The full wire format is
+`Docs/PROTOCOL.md`, which is authoritative; this ADR records only the
+decisions and the alternatives rejected, so the reasoning is not buried in
+a field table.
+
+**Context.** `Docs/FIRMWARE-IMPLEMENTATION-PLAN.md` §3 listed M13 (UDP) and
+M14 (protocol) as blocked on six items: port number, packet format, motion
+wire encoding, feedback format, backpressure mechanism and comm-timeout
+threshold. `Docs/MACH3-INTERFACE.md` §7 listed the same gaps from the host
+side. This ADR closes them.
+
+**Evidence used.** `SDK/ncPod/ExternalMovement.cpp` and `ncPODDriver.h` for
+the motion model (time-sliced per-axis velocity, 32 records ≈ 128 ms at
+≈50 Hz, host-side fractional carry, host sequence echoed in status,
+buffer-full backpressure with host retry, input/output bitfields and
+per-axis step positions in status). `SDK/Galil PlugIn/G100-Structs.h` for
+independent confirmation of the same shape from a second vendor, including
+a queue sequence kept separate from the message sequence, and a window
+field for flow control.
+
+**Decisions:**
+
+1. **UDP port 55010.** Arbitrary, in IANA's dynamic range, digits echoing
+   the device address `192.168.5.10`. No SDK evidence exists for a port —
+   `ncPod` is a USB device, and Galil's `13887` is that vendor's. Defined
+   once in `Firmware/Net/Inc/net_config.h`.
+2. **Little-endian wire.** `ncPod` byte-swaps because its PIC was
+   big-endian; a Cortex-M4 talking to an x86 PC has no such reason, and
+   copying the swap would cost work at both ends for nothing.
+3. **Motion carried as signed 1/65536-step-per-slice `int32` per axis**,
+   five axes, with the slice duration explicit in the packet. Keeps the
+   host free of the device's step scaling, and the device free of the
+   host's millimetre domain — the ADR-007 split. The device converts to
+   `motion_segment_t` with its own `tick_hz`; both the slice conversion and
+   the resulting rate are checked exactly, never clamped.
+4. **A motion sequence (`block_seq`) separate from the message sequence
+   (`seq`).** They answer different questions: a lost status poll is
+   harmless, a lost motion block is a missing piece of the toolpath. Galil
+   makes the same split.
+5. **A `block_seq` gap stops motion and latches a fault.** Skipping forward
+   would cut the wrong shape. Recovery is explicit, per ADR-010.
+6. **A motion block is accepted atomically.** Partial acceptance would make
+   a retry ambiguous, which is exactly how a half-applied block becomes a
+   wrong toolpath.
+7. **No NACK packet.** `STATUS` carries the rejection reason, so there is
+   one reply type and one state machine per side instead of two.
+8. **Comm timeout 200 ms, supervised only while motion is active.** Ten
+   host cycles at 50 Hz, and deliberately shorter than the ~256 ms a full
+   queue takes to drain, so a dead host is diagnosed as a timeout rather
+   than surfacing later as starvation. A quiet host between programs is not
+   a fault.
+9. **Corrupt packets get no reply.** If the CRC failed, the sequence number
+   in that packet is not trustworthy either.
+
+**Alternatives considered:**
+
+- *Forward `GMoves` verbatim* — rejected by ADR-007 already, and by the
+  evidence: the reference device does not do it either.
+- *Send the engine's Q32 rate directly on the wire* — rejected. It is the
+  cheapest possible decode, but it hard-codes the device's base tick into
+  the host's encoder, so a device running `stepgen_configure_max_rate()` at
+  1 MHz would execute every feed at double speed with nothing to detect it.
+- *Reuse `ncPod`'s opcode numbers* — rejected: they are that device's USB
+  API, and matching numbers would imply a compatibility this device does
+  not have.
+- *Treat a motion gap as recoverable and continue* — rejected; see 5.
+- *Per-record acknowledgement instead of per-block* — rejected as
+  bandwidth and state for no safety gain over atomic blocks.
+- *A TCP transport* — not considered seriously: `Docs/ETHERNET.md` §5 fixes
+  UDP, and the SDK's own socket wrapper shows UDP is what Mach3 plugins
+  use. Head-of-line blocking would also be the wrong failure mode for
+  motion.
+
+**Timing impact:** None on STEP generation. Decoding a full 32-record block
+is bounded work — 160 multiply/divide pairs, no allocation, no loops beyond
+`record_count` — and runs in the lwIP `NO_SYS` receive path, which executes
+in the `MX_LWIP_Process()` superloop, **not** in the ETH interrupt. It is
+preemptible by the STEP-DMA vector at NVIC priority 2 throughout (ADR-012).
+
+**Memory impact:** One UDP PCB, a 96-byte status packet built on the stack,
+and no new buffers. The motion queue is Phase 1's existing 64 slots.
+
+**Risks:**
+
+1. The whole protocol is exercised only against the host test suite and a
+   Python tool. Nothing has round-tripped over real Ethernet — that needs
+   the board (HV-30, `Docs/HARDWARE-VALIDATION.md`).
+2. `OUTPUTS` has a fixed wire format but no implementation behind it (M9 /
+   M10 do not exist). It is answered with `NOT_IMPLEMENTED` rather than
+   silently accepted.
+3. Rounding in the rate conversion leaves a bounded residual (under
+   4 × 10⁻⁶ steps per 4 ms slice). The host is expected to close the loop
+   from `pos_output[]`, as `ncPod`'s plugin does from its own `vtotal[]`.
+
+**Validation result:** Host tests pass; hardware TBD.
+
 # 42. AI-Assisted Development Rules
 
 This repository is intended to support AI-assisted firmware development.

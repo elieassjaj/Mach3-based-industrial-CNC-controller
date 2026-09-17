@@ -29,6 +29,7 @@
 #include "stepgen.h"
 #include "stepgen_selftest.h"
 #include "net_selftest.h"
+#include "net_udp.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -57,6 +58,9 @@ volatile uint32_t g_stepgen_tick_hz;
 volatile bool     g_stepgen_selftest_pass;
 volatile bool     g_net_selftest_pass;
 #endif
+
+/* Protocol layer (Phase 3) bring-up status, readable over SWD. */
+volatile bool     g_udp_ready;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -137,6 +141,13 @@ int main(void)
   g_net_selftest_pass = net_selftest_run_all();
 #endif
 
+  /* Protocol layer (Phase 3). Binds UDP 55010 and waits. Nothing moves as a
+   * result of this: the engine is still in SAFE_IDLE with the drives
+   * disabled, and it stays there until a host sends CONTROL:ENABLE_DRIVES
+   * and CONTROL:START. Motion blocks arriving before that are refused with
+   * WRONG_STATE rather than queued. */
+  g_udp_ready = net_udp_init();
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -147,6 +158,9 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    /* Status stream and comm-timeout supervision. MX_LWIP_Process() above
+     * delivers received datagrams; this drives the outbound half. */
+    net_udp_poll();
   }
   /* USER CODE END 3 */
 }

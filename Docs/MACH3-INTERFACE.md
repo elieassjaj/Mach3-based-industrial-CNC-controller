@@ -37,7 +37,9 @@ CNC5AX-ETH (STM32F407)
 Drives / machine
 ```
 
-The SDK's `SDK/BlankMovement/` is the skeleton for exactly this kind of plugin, and `SDK/ncPod/`, `SDK/g100IO/` and `SDK/Galil PlugIn/` are worked examples of **Ethernet-connected** motion controllers built on it. `SDK/ncPod/` is the closest reference for this project.
+The SDK's `SDK/BlankMovement/` is the skeleton for exactly this kind of plugin, and `SDK/ncPod/`, `SDK/g100IO/` and `SDK/Galil PlugIn/` are worked examples of external motion controllers built on it. `SDK/ncPod/` is the closest reference for this project's **motion data model**.
+
+> **Correction (Phase 3).** An earlier revision of this section described `ncPod` as Ethernet-connected. It is not: `SDK/ncPod/ncPODDriver.h` defines **USB endpoints** ("64 byte usb packets are sent to and from the pod through 2 different endpoints"), and the project links `libusb.lib`. That does not weaken it as a reference — what this project takes from `ncPod` is the *shape of the motion data* (§4), which is transport-independent — but it does mean `ncPod` is no evidence at all about UDP, ports or framing. Those come from `SDK/Galil PlugIn/` and `MachIncludes/UDPSocket.h` (§5), and where the SDK is silent, from this project's own decisions in `Docs/PROTOCOL.md`.
 
 ### 2.1 Plugin entry points the device must service
 
@@ -135,14 +137,25 @@ Mach3 plugins use MFC's `CAsyncSocket`. The SDK's `CUDPSocket` wrapper creates a
 
 | Item | Status |
 |---|---|
-| Repository location for the PC-side Mach3 plugin | `[TBD]` — no directory reserved yet |
-| Our UDP packet format (header, opcode, sequence, payload, CRC) | `[TBD]` |
+| Repository location for the PC-side Mach3 plugin | `[TBD]` — still unreserved. `Tools/` now holds a Python test client, but that is a bench tool, not the plugin, and does not settle where the plugin lives |
+| Our UDP packet format (header, opcode, sequence, payload, CRC) | **RESOLVED** — `Docs/PROTOCOL.md` §4, ADR-014 |
 | Static IP values | `[FW-CONFIRMED]` Controller `192.168.5.10`, PC `192.168.5.100` — `Docs/ETHERNET.md` §15 |
-| UDP port number | `[TBD]` |
-| Slice duration and block size for our own protocol | `[TBD]` — reference design uses 2–4 ms slices, 32 per block |
-| Device→host status packet contents and rate | `[TBD]` |
-| Mapping of Mach3's 6 axes onto this controller's 5 | `[TBD]` |
-| Homing, probing, spindle and jog command encodings | `[TBD]` |
+| UDP port number | **RESOLVED** — **55010**, ADR-014 |
+| Slice duration and block size for our own protocol | **RESOLVED** — host-chosen `slice_us`, up to 32 records per block; 4 ms × 32 recommended, `Docs/PROTOCOL.md` §8 |
+| Device→host status packet contents and rate | **RESOLVED** — 96-byte `STATUS` at 50 Hz, `Docs/PROTOCOL.md` §6 |
+| Mapping of Mach3's 6 axes onto this controller's 5 | **RESOLVED** — five wire slots X,Y,Z,A,B; **no C field exists at any offset**, `Docs/PROTOCOL.md` §5.5 |
+| Homing, probing, spindle and jog command encodings | `[TBD]` for homing and probing (both need M3). Jog and dwell need no opcode — they are ordinary motion blocks. Spindle/relay have a fixed wire format that the firmware answers `NOT_IMPLEMENTED` until M9/M10 exist — `Docs/PROTOCOL.md` §9, §10 |
 | Mach3 version/licence constraints for plugin distribution | `[TBD]` |
 
-The SDK archives in `MACH3/` remain the authority for anything host-side. `SDK/ncPod/` and `SDK/Galil PlugIn/` should be re-read in detail before the protocol is specified.
+The SDK archives in `MACH3/` remain the authority for anything host-side.
+
+## 8. What the plugin must do, recorded now
+
+`[DESIGN-IMPLICATION]` Obligations that Phase 3 pushed onto the host, listed here so Phase 4 does not have to rediscover them from `Docs/PROTOCOL.md`:
+
+1. **Carry the per-axis fractional remainder** across slices, as `ncPod`'s plugin does with `fractions[]`. The firmware never sees the millimetre-domain path and cannot do this for the host.
+2. **Refuse a program that commands the C axis.** Quietly dropping a sixth axis machines the wrong part. There is no C field to drop it into, which is the point.
+3. **Never assume a block was accepted.** Read `last_block_seq` and `queue_free` from the status; retry a refused block with the *same* `block_seq`.
+4. **Close the position loop from `pos_output[]`.** The device is never more than one step behind but is, in general, one step behind — `Docs/PROTOCOL.md` §5.3.
+5. **Stop on any latched `proto_faults` bit and require operator action.** Clearing and continuing past a `SEQ_GAP` means cutting a path with a hole in it.
+6. **Check `tick_hz` from `INFO`** before choosing `slice_us`, so the slice converts exactly, and before trusting a feed rate to be inside the device ceiling.

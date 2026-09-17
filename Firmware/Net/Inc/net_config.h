@@ -92,6 +92,16 @@
 #define NET_PRIO_ETH                 5u
 #define NET_PRIO_STEP_DMA            2u   /* mirrors STEPGEN_PRIO_DMA       */
 
+/* -------------------------------------------------------- UDP port ------ */
+/* ADR-014 / Docs/PROTOCOL.md §2. Arbitrary, in IANA's dynamic range
+ * (49152-65535) so it collides with no registered service, digits echoing
+ * the device address 192.168.5.10. No SDK evidence exists for a port
+ * number: ncPod is a USB device, and Galil's 13887 is that vendor's.
+ *
+ * This is the only place the port is written. The protocol layer, the
+ * status transmitter and the PC-side tool all read it from here.          */
+#define NET_UDP_PORT             55010u
+
 /* ------------------------------------------------------------- misc ----- */
 /* Link poll period of the CubeMX-generated Ethernet_Link_Periodic_Handle(). */
 #define NET_LINK_POLL_MS           100u
@@ -123,5 +133,9 @@ NET_STATIC_ASSERT(NET_PRIO_ETH > NET_PRIO_STEP_DMA, eth_below_step_dma);
 
 /* Host and controller must share the /24 but not the address. */
 NET_STATIC_ASSERT(NET_HOST_IP_ADDR3 != NET_IP_ADDR3, host_ip_differs);
+
+/* ADR-014: the port must stay in the dynamic/private range, where no
+ * registered service can collide with it. */
+NET_STATIC_ASSERT(NET_UDP_PORT >= 49152u, udp_port_is_dynamic_range);
 
 #endif /* NET_CONFIG_H */
