@@ -146,12 +146,15 @@ static void low_level_init(struct netif *netif)
 
    uint8_t MACAddr[6] ;
   heth.Instance = ETH;
-  MACAddr[0] = 0x00;
-  MACAddr[1] = 0x80;
-  MACAddr[2] = 0xE1;
-  MACAddr[3] = 0x00;
+  /* Locally-administered bench MAC (ADR-011, Docs/FIRMWARE-ARCHITECTURE.md
+   * Section 41) - not the CubeMX placeholder 00:80:E1:00:00:00, which is a
+   * real vendor's OUI and must not be used even for bench testing. */
+  MACAddr[0] = 0x02;
+  MACAddr[1] = 0x00;
+  MACAddr[2] = 0x05;
+  MACAddr[3] = 0x10;
   MACAddr[4] = 0x00;
-  MACAddr[5] = 0x00;
+  MACAddr[5] = 0x01;
   heth.Init.MACAddr = &MACAddr[0];
   heth.Init.MediaInterface = HAL_ETH_RMII_MODE;
   heth.Init.TxDesc = DMATxDscrTab;
