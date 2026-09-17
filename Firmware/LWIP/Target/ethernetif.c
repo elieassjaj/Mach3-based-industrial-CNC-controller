@@ -33,7 +33,8 @@
 
 /* Within 'USER CODE' section, code will be kept by default at each generation */
 /* USER CODE BEGIN 0 */
-
+#include "net_config.h"
+#include "net_glue.h"
 /* USER CODE END 0 */
 
 /* Private define ------------------------------------------------------------*/
@@ -148,7 +149,10 @@ static void low_level_init(struct netif *netif)
   heth.Instance = ETH;
   /* Locally-administered bench MAC (ADR-011, Docs/FIRMWARE-ARCHITECTURE.md
    * Section 41) - not the CubeMX placeholder 00:80:E1:00:00:00, which is a
-   * real vendor's OUI and must not be used even for bench testing. */
+   * real vendor's OUI and must not be used even for bench testing.
+   * Overwritten from Net/Inc/net_config.h in the USER CODE block below, so
+   * a regeneration restoring the placeholder here is corrected before
+   * HAL_ETH_Init() ever sees it. HV-23 checks the MAC filter register. */
   MACAddr[0] = 0x02;
   MACAddr[1] = 0x00;
   MACAddr[2] = 0x05;
@@ -162,7 +166,23 @@ static void low_level_init(struct netif *netif)
   heth.Init.RxBuffLen = 1536;
 
   /* USER CODE BEGIN MACADDRESS */
+  MACAddr[0] = NET_MAC_0;
+  MACAddr[1] = NET_MAC_1;
+  MACAddr[2] = NET_MAC_2;
+  MACAddr[3] = NET_MAC_3;
+  MACAddr[4] = NET_MAC_4;
+  MACAddr[5] = NET_MAC_5;
 
+  /* ADR-013: hardware-reset the PHY before HAL_ETH_Init() below.
+   *
+   * Before HAL_ETH_Init(), not after: that call performs the MAC's DMA soft
+   * reset, and starting it while the PHY is still in reset is asking for a
+   * timeout. By the time it runs, the PHY is out of reset and settled.
+   *
+   * The board has no reset supervisor on nRST - just a pull-up - so without
+   * this the PHY is only ever reset by its own internal power-on circuit,
+   * and a warm MCU reset never resets it at all. */
+  (void)net_glue_phy_reset();
   /* USER CODE END MACADDRESS */
 
   hal_eth_init_status = HAL_ETH_Init(&heth);

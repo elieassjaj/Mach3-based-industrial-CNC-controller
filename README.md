@@ -111,8 +111,11 @@ Mach3-based-industrial-CNC-controller/
 │   ├── ETHERNET.md
 │   ├── FIRMWARE-ARCHITECTURE.md
 │   ├── FIRMWARE-IMPLEMENTATION-PLAN.md
+│   ├── HARDWARE-VALIDATION.md
 │   ├── MACH3-INTERFACE.md
 │   ├── MOTION-ENGINE.md
+│   ├── PHASE1-STATUS.md
+│   ├── PHASE2-STATUS.md
 │   ├── PINOUT.md
 │   ├── PRE-IMPLEMENTATION-DECISIONS.md
 │   └── SYSTEM-ARCHITECTURE.md
@@ -130,6 +133,15 @@ Mach3-based-industrial-CNC-controller/
 │   │   ├── App/                    lwip.c, lwip.h
 │   │   └── Target/                 ethernetif.c, lwipopts.h
 │   ├── Middlewares/Third_Party/LwIP/
+│   ├── Motion/                     portable STEP/DIR engine (Phase 1)
+│   ├── Net/                        portable network config + link observer (Phase 2)
+│   ├── Platform/
+│   │   ├── STM32F407/              hardware ports and on-target self-tests
+│   │   └── Host/                   simulation port for the host test suite
+│   ├── Tests/                      host verification
+│   ├── Makefile                    test | arm | firmware
+│   ├── MOTION-README.md
+│   ├── NET-README.md
 │   ├── STM32F407VGTX_FLASH.ld
 │   ├── STM32F407VGTX_RAM.ld
 │   └── .project, .cproject, .mxproject, .settings/
@@ -171,7 +183,8 @@ Mach3-based-industrial-CNC-controller/
 | [`Docs/MOTION-ENGINE.md`](Docs/MOTION-ENGINE.md) | STEP/DIR timing requirements, multi-axis behavior, buffering and acceptance criteria |
 | [`Docs/ETHERNET.md`](Docs/ETHERNET.md) | LAN8720A/RMII, Ethernet MAC/DMA, LwIP and UDP architecture |
 | [`Docs/HARDWARE-VALIDATION.md`](Docs/HARDWARE-VALIDATION.md) | Procedure for measuring the motion requirements on real hardware |
-| [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) | Phase 1 results, assumptions, blockers and open risks |
+| [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) | Phase 1 (motion engine) results, assumptions, blockers and open risks |
+| [`Docs/PHASE2-STATUS.md`](Docs/PHASE2-STATUS.md) | Phase 2 (Ethernet/LwIP) results, the reverted-static-IP finding, assumptions and risks |
 | [`Docs/MACH3-INTERFACE.md`](Docs/MACH3-INTERFACE.md) | How Mach3 drives an external motion device, established from the SDK |
 | [`Docs/FIRMWARE-IMPLEMENTATION-PLAN.md`](Docs/FIRMWARE-IMPLEMENTATION-PLAN.md) | Firmware module breakdown, protocol dependencies, frozen-assumption list, implementation/verification order |
 | [`Docs/PRE-IMPLEMENTATION-DECISIONS.md`](Docs/PRE-IMPLEMENTATION-DECISIONS.md) | Per-item decision list: requirement, what was undecided, dependents, resolution or explicit open question |
@@ -195,7 +208,16 @@ Mach3-based-industrial-CNC-controller/
 
 ## Firmware Project State
 
-`Firmware/` contains an STM32CubeIDE project (`CNC5AX-ETH.ioc`, CubeMX 6.15.0, STM32Cube FW_F4 V1.28.0, target `STM32F407VGT6`/LQFP100) that is currently **peripheral initialization only**. It consists of CubeMX-generated startup, clock, GPIO, DMA, timer, EXTI/NVIC and LwIP scaffolding. No motion, protocol, or application logic has been written: `main()`'s `while (1)` loop is empty and the `USER CODE` sections are unmodified.
+`Firmware/` contains an STM32CubeIDE project (`CNC5AX-ETH.ioc`, CubeMX 6.15.0, STM32Cube FW_F4 V1.28.0, target `STM32F407VGT6`/LQFP100) carrying the CubeMX-generated startup, clock, GPIO, DMA, timer, EXTI/NVIC and LwIP scaffolding, plus two implemented subsystems:
+
+| Phase | Subsystem | State |
+|---|---|---|
+| 1 | Motion engine — STEP/DIR generation (`Motion/`, `Platform/STM32F407/`) | Implemented, 1150 host checks, integrated and linking. **Not hardware-validated** — see [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) |
+| 2 | Ethernet/LwIP bring-up, M12 (`Net/`, `Platform/STM32F407/`) | Implemented, 130 host checks, whole firmware links. **No link has been established on real hardware** — see [`Docs/PHASE2-STATUS.md`](Docs/PHASE2-STATUS.md) |
+
+Neither phase may be reported as compliant with any requirement it has not measured on the board; both are gated on the prototype PCB. `Firmware/MOTION-README.md` and `Firmware/NET-README.md` cover building and the CubeIDE project settings each subsystem needs.
+
+Still unwritten: the UDP socket layer (M13), the protocol layer (M14) and the Mach3 host plugin — all blocked on the packet format and port number (`Docs/FIRMWARE-IMPLEMENTATION-PLAN.md` §3), which are decisions rather than code.
 
 ### What the generated configuration establishes
 
@@ -205,28 +227,30 @@ Mach3-based-industrial-CNC-controller/
 | Debug | SWD only (`PA13`/`PA14`); JTAG not used, which is what frees `PB4` for spindle PWM |
 | STEP | `PA8`–`PA12` = X, Y, Z, A, B — GPIO output push-pull, very-high speed, driven LOW at init |
 | DIR / enable | `PD8`–`PD12` (DIR X–B), `PD15` (`MOTOR_EN`) — GPIO output push-pull, very-high speed, driven LOW at init. `MOTOR_EN` is **active high**, so LOW at init means the drives are disabled until firmware enables them |
-| STEP base timer | TIM2, PSC = 0, ARR = 20 → 4.000 MHz update rate (250 ns tick); TIM2 global interrupt deliberately not enabled |
-| STEP DMA | `DMA1_Stream1` / Channel 3 on the `TIM2_UP` request — memory-to-peripheral, 32-bit both sides, circular, very-high priority, peripheral increment disabled |
+| STEP base timer | TIM8, PSC = 0, ARR = 41 → 4.000 MHz update rate (250 ns tick); TIM8 global interrupt deliberately not enabled. (TIM2 per ADR-004, superseded by **ADR-012**: DMA1's peripheral port is not a bus-matrix master and cannot reach GPIO at all, and DMA2 takes timer requests only from TIM1/TIM8) |
+| STEP DMA | `DMA2_Stream1` / Channel 7 on the `TIM8_UP` request — memory-to-peripheral, 32-bit both sides, circular, very-high priority, peripheral increment disabled |
 | Spindle PWM | TIM3 CH1 on `PB4` (AF2), PSC = 83, ARR = 99 → 10.000 kHz, 0 % duty at init |
 | Digital inputs | `PE0`–`PE14` (15 pins) as EXTI, rising **and** falling edge, `GPIO_NOPULL` — correct, the board provides external pull-ups |
 | E-STOP | `PE2`, dedicated `EXTI2_IRQn` vector, pre-emption priority 0 |
-| NVIC | Priority group 4; EXTI2 = 0, other EXTI = 1, `DMA1_Stream1` = 2, ETH = 5, SysTick = 15 |
-| Ethernet | ETH peripheral in RMII mode on the nine pins listed in `Docs/PINOUT.md`; `PB0` (`PHY_NRST`) driven HIGH at init to release the LAN8720A from reset, internal pull-up enabled as a backup to the board's own 4.7 kΩ pull-up |
+| NVIC | Priority group 4; EXTI2 = 0, other EXTI = 1, `DMA2_Stream1` = 2, ETH = 5, SysTick = 15. The ETH-below-STEP-DMA ordering is a binding rule (ADR-012) checked at runtime by HV-22 |
+| Ethernet | ETH peripheral in RMII mode on the nine pins listed in `Docs/PINOUT.md`; `PB0` (`PHY_NRST`) pulsed LOW for 150 µs then released before MAC init (**ADR-013**, Phase 2), internal pull-up enabled as a backup to the board's own 4.7 kΩ pull-up |
 | PHY driver | LAN8742 (CubeMX's closest available option — see `Docs/ETHERNET.md` §2.2), auto-scans SMI address 0–31, decodes link/speed/duplex from register `0x1F` and applies it to the MAC via `HAL_ETH_SetMACConfig()` |
 | LwIP | v2.1.2, `NO_SYS = 1`, RAW API only (`LWIP_NETCONN` / `LWIP_SOCKET` = 0), hardware checksum offload; ETH DMA descriptors placed in normal RAM (not CCM); `MX_LWIP_Process()` now called each superloop iteration |
 | IP configuration | Static — controller `192.168.5.10`, PC `192.168.5.100`, mask `255.255.255.0`, no gateway (`LWIP_DHCP = 0`) — see `Docs/ETHERNET.md` §15 |
 | Outputs | `PB8` relay, `PB2` run LED, `PB1` error LED — GPIO output push-pull |
 
-These values match ADR-002, ADR-004 and ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.md`.
+These values match ADR-004 and ADR-005 in `Docs/FIRMWARE-ARCHITECTURE.md`, as corrected by ADR-012, and ADR-011/ADR-013 for the Ethernet entries.
 
-### Known open items in the generated project
+### Known open items
 
 Listed so they are not mistaken for working functionality:
 
-- **`PB0`/`PHY_NRST` is only ever held HIGH from firmware boot — it is never pulsed.** Functionally this releases the PHY as required, but the LAN8720A datasheet's power-on timing (§5.6.3) specifies the external reset should stay asserted for at least 25 ms after supplies stabilize; this design relies entirely on the PHY's own internal power-on reset plus the board's pull-up for that, since the MCU never drives the pin low. Works in practice (the driver also issues an MDIO soft-reset during `LAN8742_Init()`), but explicitly pulsing `PB0` low for ≥100 µs at the start of `low_level_init()` before releasing it would make cold-boot behavior deterministic rather than dependent on the PHY's internal POR. Recommended hardening, not a blocker.
-- TIM2 and TIM3 are initialized but never started; there is no STEP BSRR buffer, no DMA start, no motion engine, no UDP protocol layer and no Mach3 integration yet.
-- MAC address, IP/port values, watchdog, heap/stack sizes and LwIP memory sizing are still at CubeMX defaults or undefined.
-- PHY SMI address is auto-scanned by the LAN8742 driver rather than assumed, which resolves the address-strap ambiguity noted in `Docs/ETHERNET.md`.
+- **Nothing above has been confirmed on hardware.** Every claim is from source, the linker map and host tests. The 2 MHz three-axis requirement (HV-11) and the Ethernet timing-isolation requirement (HV-15) are both unmeasured, and `Docs/MOTION-ENGINE.md` Rule 8 forbids claiming either until they are.
+- TIM3 (spindle PWM) is initialized but never started; there is no output manager yet (M9/M10).
+- No UDP socket layer, protocol layer or Mach3 integration — blocked on the packet format and port number.
+- Watchdog, heap/stack sizes and LwIP memory sizing are still at CubeMX defaults. MAC and IP are no longer: both come from `Firmware/Net/Inc/net_config.h` as of Phase 2.
+- PHY SMI address is auto-scanned by the LAN8742 driver rather than assumed, which resolves the address-strap ambiguity noted in `Docs/ETHERNET.md`. The value the scan actually finds is recorded by HV-25 and is still unknown.
+- A CubeMX regeneration remains the main hazard to both subsystems: it silently reverted the static IP configuration once already (`Docs/PHASE2-STATUS.md` §2). Run the self-tests after every regeneration.
 
 ---
 
@@ -401,21 +425,22 @@ This repository is intended to be developed with AI assistance. The following ru
 | Firmware architecture | Documented |
 | Motion engine requirements | Documented |
 | Ethernet/LwIP architecture | Documented |
-| `Firmware/` STM32CubeIDE project | Present — peripheral initialization only (see [Firmware Project State](#firmware-project-state)) |
+| `Firmware/` STM32CubeIDE project | Present — motion engine (Phase 1) and Ethernet bring-up (Phase 2) implemented (see [Firmware Project State](#firmware-project-state)) |
 | STEP-DMA base timer & DMA allocation | **TIM8 + DMA2 Stream1/Channel7** (ADR-012, accepted). The original `TIM2`+`DMA1_Stream1` path could not work — RM0090 §2.1 and Figure 33 show DMA1's peripheral port is not a bus-matrix master, so it cannot reach `GPIOA->BSRR` at all. `.ioc` updated and verified |
 | All 5 STEP axes on one GPIO port (`PA8`–`PA12`) | As decided (ADR-005) — one BSRR word per tick, zero cross-axis skew |
 | Firmware execution model | Bare-metal, interrupt-driven superloop (ADR-003) — superloop body not yet written |
 | STM32 Datasheet / RM0090 / Errata PDFs | Uploaded and verified |
-| CubeMX `.ioc` peripheral configuration | Clock, GPIO, EXTI/NVIC, TIM2 + DMA, TIM3 spindle PWM, Ethernet RMII and LwIP configured |
-| Ethernet bring-up | PHY release, LAN8742-compatible driver, static IP and `MX_LWIP_Process()` all in place; untested on real hardware |
+| CubeMX `.ioc` peripheral configuration | Clock, GPIO, EXTI/NVIC, TIM8 + DMA2, TIM3 spindle PWM, Ethernet RMII and LwIP (static IP) configured |
+| Ethernet bring-up code (M12, Phase 2) | **Implemented** — ADR-013 PHY reset pulse, ADR-011 MAC, static IP restored and made regeneration-proof, portable link observer. 130 host checks passing. **No link established on hardware** — see [`Docs/PHASE2-STATUS.md`](Docs/PHASE2-STATUS.md) |
 | Motion engine / STEP generation code | **Implemented and integrated (Phase 1)** — DDA step generator, DMA→BSRR ring, ADR-006 CPU-timed DIR, ADR-010 state model. 1150 host checks passing |
-| Full firmware build | **Links clean** — 84 KB flash (8.2%), SRAM1 36.7%, SRAM2 25% (STEP ring isolated in SRAM2) |
+| Full firmware build | **Links clean**, motion + network. `make firmware` verifies the whole image, including the generated files; Ethernet buffers confirmed in SRAM1 and the STEP ring in SRAM2 |
 | Motion hardware validation plan | **Written** — [`Docs/HARDWARE-VALIDATION.md`](Docs/HARDWARE-VALIDATION.md), plus on-target self-tests HV-00..HV-05 |
-| On-target self-tests | Implemented, **not yet run** (no hardware available) |
+| On-target self-tests | Implemented — HV-00..HV-05 (motion) and HV-20..HV-25 (network); **not yet run** (no hardware available) |
 | Measured CPU headroom | **Not measured** — estimated ~60-70% duty at the 2 MHz ceiling; scales down with `stepgen_configure_max_rate()` (1 MHz ceiling ≈ half). HV-04 is the gate. See RISK-1 in [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) |
 | Mach3 host-side plugin | Not started |
-| Final UDP application protocol | TBD |
+| Final UDP application protocol | TBD — the gate for M13/M14 and the Mach3 plugin |
 | Verified 3-axis @ 2 MHz performance | **Not validated** — requires HV-11 on real hardware; explicitly not claimed |
+| Motion timing under Ethernet load | **Not validated** — HV-15, the empirical form of the project's central rule. Runnable now that Phase 2 exists; needs the board |
 | Production-ready firmware | Not yet complete |
 
 ---

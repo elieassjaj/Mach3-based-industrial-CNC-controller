@@ -277,6 +277,110 @@ is not lost: measure PE2 edge → STEP low → `EN` low, with the engine at
 
 ---
 
+## 5b. Network tests (HV-2x) — Phase 2 / M12
+
+Run by `net_selftest_run_all()`
+(`Firmware/Platform/STM32F407/Src/net_selftest_stm32f4.c`), which
+`main()` calls at boot when `CNC_RUN_SELFTEST_AT_BOOT` is set. Results are
+in `net_selftest_results()`, readable over SWD.
+
+HV-20..HV-24 need only power and the PHY module. **HV-25 needs a cable to
+the Mach3 PC** and is excluded from the overall verdict for that reason —
+at boot, auto-negotiation has had a few milliseconds and the link being
+down there means nothing.
+
+### HV-20 — PHY reset pulse (**ADR-013**)
+
+*Method.* Firmware self-check, plus a scope on `PB0` for the definitive
+measurement.
+
+*Pass.* `net_port_phy_reset_done()` is true, `PB0` reads back HIGH, and
+the measured assertion is at least 150 µs in CPU cycles (168 cycles/µs →
+≥ 25,200). The scope capture should show a single clean low pulse of
+≥ 150 µs before any MDIO activity.
+
+*Why both.* The self-check catches the two failures that are otherwise
+invisible: a regeneration dropping the `USER CODE` call, and a delay loop
+that is silently too short. It cannot catch a wrong `SystemCoreClock`
+that is wrong in the *same* direction as the cycle-count conversion — the
+scope can.
+
+*Also test the case the status quo never covered.* Trigger a warm MCU
+reset (SWD reset, not a power cycle) and confirm the link still comes up.
+Before ADR-013 the PHY was only ever reset by its own internal power-on
+circuit, so a warm reset left it in whatever state it was in.
+
+### HV-21 — Ethernet and lwIP buffers are in SRAM1 (**ADR-012**)
+
+*Method.* Firmware self-check.
+
+*Pass.* `DMARxDscrTab`, `DMATxDscrTab` and the `RX_POOL` pool all lie
+inside `0x20000000`–`0x2001C000`. On failure, `measured` holds the
+offending address.
+
+*Why it matters.* This is the other half of HV-03. SRAM2 is the STEP
+ring's own bus-matrix slave port; an Ethernet buffer there puts back the
+contention ADR-012 removed. CCM RAM is worse — RM0090 §2.1: not on the
+bus matrix, reachable only by the CPU, so no DMA master including the
+Ethernet MAC's own can touch it, and a descriptor there is not slow but
+non-functional.
+
+*Static result already available.* The Phase 2 verification build places
+`DMATxDscrTab` at `0x20000438`, `DMARxDscrTab` at `0x200004D8` and
+`memp_memory_RX_POOL_base` at `0x20000580` — all SRAM1.
+
+### HV-22 — Ethernet interrupts below the STEP-DMA vector (**ADR-012**)
+
+*Method.* Firmware self-check, read from the NVIC itself rather than from
+the `.ioc` — the `.ioc` is what a regeneration rewrites.
+
+*Pass.* `priority(ETH_IRQn) > priority(DMA2_Stream1_IRQn)` and
+`priority(ETH_WKUP_IRQn) > priority(DMA2_Stream1_IRQn)`; expected 5, 5, 2.
+`measured` packs them as `0xEEWWSS`.
+
+*Why it matters.* This is the NVIC half of "Ethernet must not affect STEP
+timing". If Ethernet could preempt the STEP-DMA vector, a burst of packets
+would delay a ring refill or an ADR-006 DIR write, and the only evidence
+would be jitter on a scope. HV-15 is the empirical counterpart.
+
+### HV-23 — MAC address is ADR-011's (**not the vendor placeholder**)
+
+*Method.* Firmware self-check, reading `MACA0HR`/`MACA0LR` — the register
+the MAC actually sources frames with, not the C literal.
+
+*Pass.* `02:00:05:10:00:01`. `measured` holds the first three octets;
+`0x0080E1` means the CubeMX placeholder came back, which is a real
+vendor's OUI and must not go on a wire.
+
+### HV-24 — Static IP active, DHCP inactive
+
+*Method.* Firmware self-check, then `ping 192.168.5.10` from the PC.
+
+*Pass.* The interface carries `192.168.5.10/255.255.255.0`, and with
+`LWIP_DHCP` compiled in, no DHCP state is attached to the netif.
+
+*Why it exists.* This exact regression already happened: the static
+configuration was written into CubeMX-generated regions and a later
+regeneration restored `dhcp_start()` (see `Docs/ETHERNET.md` §15). There
+is no DHCP server on this link, so the symptom is an unreachable
+controller with no build-time warning.
+
+### HV-25 — Link comes up at 100 Mbit full duplex
+
+*Method.* Cable to the PC, then read `net_link_get()` after a second or
+two. Informational; excluded from the verdict.
+
+*Pass.* `link_up`, `NET_SPEED_100M`, `full_duplex`. Pull the cable and
+confirm `down_count` increments and the speed reverts to
+`NET_SPEED_NONE`; re-insert and confirm `up_count` increments.
+
+*Also worth watching.* `phy_addr` records what the driver's scan found.
+The LAN8720A strap allows 0 or 1 and this repository's sources disagree
+about which the module uses, so this is the first time the actual value is
+known — record it here when it is.
+
+---
+
 ## 6. Results table
 
 `NOT RUN` is the correct entry until hardware exists. It must not be
@@ -295,19 +399,32 @@ replaced by an expectation.
 | HV-12 5 axes @ 2 MHz | NOT RUN | — | — | Beyond requirement |
 | HV-13 Mixed rates | NOT RUN | — | — | |
 | HV-14 DIR setup/hold | NOT RUN | — | — | Validates ADR-006's `L` budget |
-| HV-15 Ethernet isolation | NOT RUN | — | — | Needs Phase 2 |
+| HV-15 Ethernet isolation | NOT RUN | — | — | Phase 2 code now exists; needs the board |
 | HV-16 Underrun safety | NOT RUN | — | — | |
 | HV-17 Pause holds with EN live | NOT RUN | — | — | ADR-010 |
 | HV-18 E-STOP response | NOT RUN | — | — | Needs the EXTI phase |
+| HV-20 PHY reset pulse | NOT RUN | — | — | ADR-013; also test a warm MCU reset |
+| HV-21 Buffers in SRAM1 | **PASS (static)** | `0x20000438`, `0x200004D8`, `0x20000580` | 2026-09-17 | Confirmed in the linked map; re-confirm at runtime on target |
+| HV-22 ETH IRQ priority | NOT RUN | — | — | ADR-012; expect 5, 5, 2 |
+| HV-23 MAC address | NOT RUN | — | — | ADR-011; expect `02:00:05:10:00:01` |
+| HV-24 Static IP / no DHCP | NOT RUN | — | — | Guards the b409ba5 regression |
+| HV-25 Link 100M full duplex | NOT RUN | — | — | Needs a cable; not part of the verdict |
 
 ---
 
 ## 7. What the host test suite already establishes
 
-`cd Firmware && make test` — 1150 checks, all passing at the time of
-writing. It reconstructs the pin waveform from the BSRR word stream and
-the CPU-timed DIR writes, then measures it in nanoseconds, so it checks
-the same properties HV-1x will.
+`cd Firmware && make test` — 1150 motion checks and 130 network checks,
+all passing at the time of writing. The motion suite reconstructs the pin
+waveform from the BSRR word stream and the CPU-timed DIR writes, then
+measures it in nanoseconds, so it checks the same properties HV-1x will.
+
+The network suite (`make test-net`) is narrower on purpose. It establishes
+that the link state machine counts transitions correctly and never reports
+a speed on a down link, and that the configuration constants still hold
+the values the documents fix and still satisfy ADR-011/012/013's
+invariants. It establishes **nothing** about the PHY, the MAC, the reset
+pulse or the wire — those are HV-20..HV-25, and they need the board.
 
 | Property | Host result |
 |---|---|

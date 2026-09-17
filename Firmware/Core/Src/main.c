@@ -28,6 +28,7 @@
 
 #include "stepgen.h"
 #include "stepgen_selftest.h"
+#include "net_selftest.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -54,6 +55,7 @@ volatile bool     g_stepgen_ready;
 volatile uint32_t g_stepgen_tick_hz;
 #if CNC_RUN_SELFTEST_AT_BOOT
 volatile bool     g_stepgen_selftest_pass;
+volatile bool     g_net_selftest_pass;
 #endif
 /* USER CODE END PV */
 
@@ -125,6 +127,14 @@ int main(void)
    * Safe to run: the drives are still disabled and the timebase is stopped
    * between tests. Inspect stepgen_selftest_results() over SWD. */
   g_stepgen_selftest_pass = stepgen_selftest_run_all();
+
+  /* Network validation HV-20..HV-24. MX_LWIP_Init() above has already run
+   * the PHY reset and brought the interface up, so all of them have
+   * something to measure. HV-25 (link state) is reported but excluded from
+   * the verdict: at this point auto-negotiation has had a few milliseconds,
+   * so a down link here means nothing. Read it from the 100 ms poll later.
+   * Inspect net_selftest_results() over SWD. */
+  g_net_selftest_pass = net_selftest_run_all();
 #endif
 
   /* USER CODE END 2 */

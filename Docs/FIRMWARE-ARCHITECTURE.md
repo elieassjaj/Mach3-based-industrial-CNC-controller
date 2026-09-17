@@ -1960,17 +1960,41 @@ the original eight left open pending a project-owner call
   one." This ADR adopts the confirmed number; it does not change the
   underlying mechanism §2.2 already proposed.
 
-**Implementation note (not yet done — tracked in
-`Docs/PRE-IMPLEMENTATION-DECISIONS.md` item 8):** `HAL_Delay()`'s 1 ms
-`SysTick` resolution cannot express a 150 µs pulse. This project already
+**Implementation note — DONE (Phase 2).** `HAL_Delay()`'s 1 ms `SysTick`
+resolution cannot express a 150 µs pulse. This project already
 has a `DWT->CYCCNT`-based cycle-accurate busy-wait pattern
 (`Firmware/Platform/STM32F407/Src/stepgen_selftest_stm32f4.c`,
 `while ((DWT->CYCCNT - t0) < n) { __NOP(); }`), but its DWT enablement
 currently happens inside the stepgen port's own init, which runs later in
-`main()` than `MX_GPIO_Init()`/`MX_LWIP_Init()`. Implementing this pulse
-therefore needs either enabling the DWT cycle counter earlier (before the
-PHY reset sequence) or an equivalent independent microsecond-delay
-primitive — an implementation detail for M12, not fixed by this ADR.
+`main()` than `MX_GPIO_Init()`/`MX_LWIP_Init()`. The first of the two
+options this ADR left open was taken: `net_port_delay_us()`
+(`Firmware/Platform/STM32F407/Src/net_port_stm32f4.c`) enables the DWT
+cycle counter itself if nothing else has, which is idempotent with respect
+to `stepgen_port_init()`'s later enablement and deliberately does not zero
+`CYCCNT` (that counter belongs to HV-04). The pulse itself is
+`net_port_phy_hw_reset()`, called from `low_level_init()`'s
+`USER CODE BEGIN MACADDRESS` block — that is, **before** `HAL_ETH_Init()`,
+not merely before the first MDIO access, so the MAC's DMA soft reset never
+runs against a PHY still held in reset.
+
+Two facts established from the repository's own sources while implementing
+it, neither of which changes the decision:
+
+- The datasheet minimum this ADR cites as "~100 µs" is exact:
+  `LAN8720A/LAN8720A_DataSheet-DS00002165.pdf` Table 5-9 gives
+  `trstia` = 100 µs min. 150 µs stands at 1.5×.
+- Datasheet §3.8.5.1 requires a clock on `XTAL1/CLKIN` *during* the reset.
+  `Docs/ETHERNET.md` §2.2 confirms against the schematic that the module's
+  own 50 MHz oscillator supplies both that pin and the MCU's `PA1` RMII
+  reference clock, independently of `nRST` — so asserting the reset stops
+  neither the PHY's clock nor the MAC's.
+
+A settle time between release and first MAC/MDIO access
+(`NET_PHY_RESET_SETTLE_US`, 1 ms) is an **implementation choice, not a
+datasheet minimum**, and is flagged as such in `Net/Inc/net_config.h`: the
+datasheet's only post-deassertion figures are `todad` (≤ 800 ns) and
+§3.8.5's note that the RMII interface runs at 2.5 MHz for the first 16 µs
+after reset. 1 ms is ~60× that, and costs nothing on a boot path.
 
 **Alternatives considered:**
 - *Leave `PB0` permanently HIGH (status quo)* — not adopted: works today
@@ -1997,10 +2021,14 @@ boot/reset, not in any real-time path.
 (which delay primitive to use before the DWT counter's normal
 enablement point).
 
-**Validation result:** TBD — pending the firmware change described above
-and confirmation on real hardware that the pulse is actually ≥150 µs
-(oscilloscope/logic analyzer on `PB0`) and that PHY link-up still succeeds
-on every reset path, not only cold power-up.
+**Validation result:** Firmware change done and compile-verified; hardware
+result still TBD. `HV-20` (`Docs/HARDWARE-VALIDATION.md`) now measures the
+assertion in CPU cycles on target and checks that `nRST` reads back
+released, so a delay loop that is silently too short fails a test rather
+than violating `trstia` unnoticed. What still needs the board: an
+oscilloscope capture of `PB0` confirming the pulse width, and PHY link-up
+on every reset path — warm/software MCU reset included, which is the case
+the status quo never covered.
 
 # 42. AI-Assisted Development Rules
 

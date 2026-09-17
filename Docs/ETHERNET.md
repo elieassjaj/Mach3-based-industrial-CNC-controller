@@ -87,7 +87,9 @@ Two points must still be handled explicitly:
 1. **PHY address.** The LAN8720A strap allows only 0 or 1 and the available sources disagree on which this module uses, so the address must be detected by scanning rather than hard-coded.
 2. **Reset release.** The driver performs MDIO reads; these fail while the PHY is held in reset, so `PB0` (`PHY_NRST`, active-low) must be driven HIGH and the PHY given its reset-release time **before** the driver is initialized. `[FW-CONFIRMED]` `MX_GPIO_Init()` now drives `PB0` HIGH (with its internal pull-up also enabled, backing up the board's own 4.7 kΩ pull-up on `nRST`), and this runs before `MX_LWIP_Init()`.
 
-   `[DECIDED — ADR-013]` `PB0` is currently only ever held HIGH — the firmware never actively pulses it LOW. The LAN8720A datasheet's power-on timing (§5.6.3, `tpurstd`) specifies external `nRST` should remain asserted for at least 25 ms after supplies reach 80% of nominal before being released. This board has no RC delay or reset supervisor on `nRST` (a plain pull-up per the schematic), so meeting that spec at cold power-up currently depends entirely on the LAN8720A's own internal power-on reset. `LAN8742_Init()` does also perform an MDIO soft-reset (`BCR` bit 15) independent of the pin, which is what makes this work in practice. **The project owner has confirmed the fix: `PB0` must be explicitly driven LOW for at least 150 µs** (deliberate margin over `trstia`, the ~100 µs general reset-assertion minimum) **at the start of `low_level_init()`, before releasing it** — a small, contained firmware change, not an architectural one. See ADR-013 (`Docs/FIRMWARE-ARCHITECTURE.md` §41) and `Docs/PRE-IMPLEMENTATION-DECISIONS.md` item 8. Firmware implementation of the pulse is still pending (needs a microsecond-precision delay; `HAL_Delay()`'s 1 ms resolution is too coarse).
+   `[DECIDED — ADR-013]` `PB0` is currently only ever held HIGH — the firmware never actively pulses it LOW. The LAN8720A datasheet's power-on timing (§5.6.3, `tpurstd`) specifies external `nRST` should remain asserted for at least 25 ms after supplies reach 80% of nominal before being released. This board has no RC delay or reset supervisor on `nRST` (a plain pull-up per the schematic), so meeting that spec at cold power-up currently depends entirely on the LAN8720A's own internal power-on reset. `LAN8742_Init()` does also perform an MDIO soft-reset (`BCR` bit 15) independent of the pin, which is what makes this work in practice. **The project owner has confirmed the fix: `PB0` must be explicitly driven LOW for at least 150 µs** (deliberate margin over `trstia`, whose exact datasheet minimum is 100 µs — `LAN8720A_DataSheet-DS00002165.pdf` Table 5-9) **at the start of `low_level_init()`, before releasing it** — a small, contained firmware change, not an architectural one. See ADR-013 (`Docs/FIRMWARE-ARCHITECTURE.md` §41) and `Docs/PRE-IMPLEMENTATION-DECISIONS.md` item 8.
+
+`[FW-CONFIRMED]` **Implemented in Phase 2.** `net_port_phy_hw_reset()` (`Firmware/Platform/STM32F407/Src/net_port_stm32f4.c`) performs the pulse with a `DWT->CYCCNT` microsecond busy-wait — `HAL_Delay()`'s 1 ms resolution cannot express 150 µs — and is called from `low_level_init()`'s `USER CODE BEGIN MACADDRESS` block, i.e. **before `HAL_ETH_Init()`**, so the MAC's own DMA soft reset never runs while the PHY is still held in reset. After releasing `nRST` it waits `NET_PHY_RESET_SETTLE_US` (1 ms, an implementation choice rather than a datasheet minimum — see §3.8.5's note that the RMII interface runs at 2.5 MHz for the first 16 µs out of reset) before returning. Datasheet §3.8.5.1 requires a clock on `XTAL1/CLKIN` *during* the reset; the module's own 50 MHz oscillator provides it independently of `nRST` (see the Clock Architecture subsection above), so that requirement is met. Hardware confirmation is HV-20 in `Docs/HARDWARE-VALIDATION.md`.
 
 If the LAN8742 driver is ever found to diverge from the LAN8720A in a way that matters, the fallback is a small project-owned PHY driver using the same five registers above; this is a contained piece of work, not an architectural change.
 
@@ -585,6 +587,14 @@ The function name must not be considered a project API unless it exists in the a
 
 The controller network configuration is a **static IPv4 address**, no DHCP, no AUTOIP. This is implemented in `Firmware/LWIP/App/lwip.h` (address octet `#define`s) and `Firmware/LWIP/App/lwip.c` (`MX_LWIP_Init()` calls `IP4_ADDR()` directly instead of `dhcp_start()`), with `LWIP_DHCP` set to `0` in `Firmware/LWIP/Target/lwipopts.h`.
 
+> **This configuration was silently lost once and has been restored with a guard.** All three of those edits sat in CubeMX-*generated* regions, so the regeneration in commit `b409ba5` reverted every one of them — `LWIP_DHCP` back to `1`, `dhcp_start()` back in `MX_LWIP_Init()`, the address `#define`s gone — while this section still described the lost state as `[FW-CONFIRMED]`. On this link there is no DHCP server, so the controller would have come up on `0.0.0.0` with nothing in the build to say why.
+>
+> Phase 2 restores the configuration **and** adds two things that survive the next regeneration:
+> - `net_glue_apply_static_ip()`, called from `MX_LWIP_Init()`'s `USER CODE BEGIN 3` block, applies the address from `Firmware/Net/Inc/net_config.h` unconditionally — and stops DHCP first if a regeneration has re-enabled it.
+> - `HV-24` fails if the running interface is not on the configured address, or if DHCP is active.
+>
+> The `.ioc` now also carries `LWIP.LWIP_DHCP=0` with the address fields, so CubeMX itself regenerates the correct code rather than being overridden after the fact.
+
 **Final values:**
 
 ```text
@@ -617,11 +627,19 @@ The PC-side IP address (`192.168.5.100`) must be configured in Windows' network 
 The authoritative source of network configuration is:
 
 ```text
+Firmware/Net/Inc/net_config.h  — AUTHORITATIVE: IP, netmask, gateway, MAC,
+                                 PHY reset timing, Ethernet NVIC priority
 Firmware/LWIP/App/lwip.h       — IP_ADDR0..3, NETMASK_ADDR0..3, GW_ADDR0..3
-Firmware/LWIP/App/lwip.c       — MX_LWIP_Init(), applies the above via IP4_ADDR()
+Firmware/LWIP/App/lwip.c       — MX_LWIP_Init(), applies the above via IP4_ADDR(),
+                                 then net_glue_apply_static_ip() in USER CODE 3
 Firmware/LWIP/Target/lwipopts.h — LWIP_DHCP (0)
-Firmware/LWIP/Target/ethernetif.c — MACAddr[] in low_level_init()
+Firmware/LWIP/Target/ethernetif.c — MACAddr[] in low_level_init(), overwritten
+                                 from net_config.h in USER CODE MACADDRESS
+Firmware/CNC5AX-ETH.ioc        — LWIP.LWIP_DHCP / IP_ADDRESS / NET_MASK /
+                                 GATEWAY_ADDRESS, so CubeMX regenerates it right
 ```
+
+`Firmware/Net/Inc/net_config.h` is the single source of truth as of Phase 2. The values in the generated files are CubeMX's own template output and are kept consistent with it, but they are not what the firmware ultimately relies on — the `USER CODE` calls above apply `net_config.h`'s values regardless, because the generated copies are exactly what a regeneration rewrites.
 
 UDP port and any application-protocol configuration will live in the protocol layer once it exists (not yet implemented — see `Docs/MACH3-INTERFACE.md`).
 
