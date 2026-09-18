@@ -4,7 +4,7 @@
 
 This document records what has been **established by reading the Mach3 SDK contained in this repository** about how Mach3 drives an external motion device, and what that implies for CNC5AX-ETH.
 
-`MACH3/SDK-README.MD` requires that the project maintain a concise, project-specific summary of the SDK APIs it actually relies on, rather than copying the SDK or assuming behavior. This document is that summary.
+`MACH3/SDK-README.MD` is a real index of the extracted SDK (eight sample plugin projects, two copies of the shared `MachIncludes` headers) and requires that the project maintain a concise, project-specific summary of the SDK APIs it actually relies on, rather than copying the SDK or assuming behavior. This document is that summary.
 
 Status tags follow `Docs/ETHERNET.md`:
 
@@ -37,7 +37,7 @@ CNC5AX-ETH (STM32F407)
 Drives / machine
 ```
 
-The SDK's `SDK/BlankMovement/` is the skeleton for exactly this kind of plugin, and `SDK/ncPod/`, `SDK/g100IO/` and `SDK/Galil PlugIn/` are worked examples of external motion controllers built on it. `SDK/ncPod/` is the closest reference for this project's **motion data model**.
+The full SDK archive is extracted under `MACH3/` — `MACH3/SDK-README.MD` is a real index of what it contains (eight sample plugin projects plus two copies of the shared `MachIncludes` headers) and states plainly which samples are and are not relevant here. Of the eight, only three actually consume trajectory data at all: `SDK/BlankMovement/` (the unfilled skeleton — the entry-point reference, §2.1 below), and two real, shipped, non-skeleton plugins, `SDK/ncPod/` and `SDK/Galil PlugIn/`, which turn out to solve "consume `GMoves`" two genuinely different ways (§4, §4a). The other five samples (`Blank Plugin`, `JoyStickPlugIn`, `Probing`, `ShuttlePro`, `g100IO`) are jog/probing/I/O plugins with no `ExternalMovement` at all and are not evidence for anything in this document.
 
 > **Correction (Phase 3).** An earlier revision of this section described `ncPod` as Ethernet-connected. It is not: `SDK/ncPod/ncPODDriver.h` defines **USB endpoints** ("64 byte usb packets are sent to and from the pod through 2 different endpoints"), and the project links `libusb.lib`. That does not weaken it as a reference — what this project takes from `ncPod` is the *shape of the motion data* (§4), which is transport-independent — but it does mean `ncPod` is no evidence at all about UDP, ports or framing. Those come from `SDK/Galil PlugIn/` and `MachIncludes/UDPSocket.h` (§5), and where the SDK is silent, from this project's own decisions in `Docs/PROTOCOL.md`.
 
@@ -111,13 +111,29 @@ These live in a **4096-entry ring buffer**, `MainPlanner->Movements[4096]`, with
 
 ---
 
+## 4a. The other real reference, `Galil PlugIn` — a different pattern this project deliberately does not follow
+
+`[SDK-CONFIRMED]` — `SDK/Galil PlugIn/ExternalMovement.cpp`:
+
+`Galil PlugIn` is the *other* real, shipped, non-skeleton motion plugin in the SDK (for Galil DMC-family motion controllers), and it solves "consume `MainPlanner->Movements[]`" completely differently from `ncPod`:
+
+- It does **not** batch moves or drip-feed velocity. It walks the same `Engine->TrajIndex`/`Engine->TrajHead` ring buffer `ncPod` uses, but one move at a time (`while( Engine->TrajIndex != Engine->TrajHead ) { GMoves move = MainPlanner->Movements[Engine->TrajIndex]; ... }`).
+- For each move it forwards the move's own **cubic `DDA1[axis]`/`DDA2[axis]`/`DDA3[axis]` coefficients and `Time`** directly to the controller (`ExternalMovement.cpp` lines ~294–311). It relays Mach3's own segment math; it does not re-derive velocity itself the way `ncPod` does.
+- This works because a Galil DMC controller has its own onboard interpolator that consumes exactly this cubic representation — the "device" in this pattern is doing Mach3-shaped math, not step generation from a velocity stream.
+
+`[DESIGN-IMPLICATION]` This is real evidence that "relay the segment coefficients, let the device interpolate" is also a valid, shipped pattern — but it is not the one this project uses. ADR-007 (`Docs/FIRMWARE-ARCHITECTURE.md` §41) already put a DDA/Bresenham accumulator on the STM32 itself, running from step-domain, time-sliced per-axis velocity: CNC5AX-ETH's firmware has no onboard consumer for raw cubic `DDA1/2/3` coefficients, so following `Galil PlugIn`'s pattern here would mean building a second on-device interpolator to parse Mach3's own cubic math — exactly the duplicated work ADR-007's "Alternatives considered" already rejected for a different reason. Finding this second pattern in the SDK does not change ADR-007; it confirms the project picked the pattern that actually matches the firmware architecture already committed to, not the only pattern that exists.
+
+---
+
 ## 5. Transport
 
 `[SDK-CONFIRMED]` — `MachIncludes/UDPSocket.h`, `MachIncludes/GenUDPSocket.h`, `SDK/Galil PlugIn/UDPSocket.cpp`:
 
 Mach3 plugins use MFC's `CAsyncSocket`. The SDK's `CUDPSocket` wrapper creates a **`SOCK_DGRAM` (UDP)** socket with `Create(port)`, and its `OnReceive()` handler calls `ReceiveFrom(Buffer, sizeof Buffer, ip, port)` and hands the datagram to the plugin. `CreateStream()` exists for `SOCK_STREAM` where a plugin wants TCP instead.
 
-`[DESIGN-IMPLICATION]` UDP as this project's transport (`Docs/ETHERNET.md` §5) is consistent with how shipping Mach3 Ethernet plugins work, and the host-side socket work is a solved, well-exemplified problem. Reliability remains our responsibility at the application layer, exactly as §27 of that document states.
+**Precision on where this is actually used in `Galil PlugIn` itself:** `CUDPSocket` there is used by `G100Config.cpp` and `MessageTracker.cpp` — device discovery/configuration traffic — not by `GalilControl.cpp`/`ExternalMovement.cpp`, whose real-time motion path goes through Galil's own command library (`DMCMLIB`/`DMC32.lib`, `DMCWIN.CPP`), not raw UDP sockets. So `Galil PlugIn` is evidence for the `CUDPSocket` wrapper's API shape (confirmed above), but it is not evidence that a shipped Mach3 motion plugin runs its motion stream over plain UDP — that is this project's own choice (`Docs/ETHERNET.md` §5, `Docs/PROTOCOL.md`), not something the SDK demonstrates end-to-end.
+
+`[DESIGN-IMPLICATION]` UDP as this project's transport (`Docs/ETHERNET.md` §5) is consistent with how the SDK's socket wrapper works and the host-side socket work is a solved, well-exemplified problem, but the specific choice to run motion (not just config/discovery) over that UDP socket is CNC5AX-ETH's own design decision, not a pattern copied from a shipped Galil deployment. Reliability remains our responsibility at the application layer, exactly as §27 of that document states.
 
 ---
 
