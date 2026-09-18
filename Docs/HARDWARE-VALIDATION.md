@@ -14,6 +14,9 @@ written into the table in §6, the corresponding claim **is not made**.
 |---|---|---|
 | **HV-0x** | In firmware, on target | Hardware assumptions the source depends on |
 | **HV-1x** | Scope / logic analyser | The externally observable STEP/DIR waveform |
+| **HV-2x** | In firmware, on target | Ethernet/PHY configuration (Phase 2) |
+| **HV-3x** | Wire + scope | The C5P1 protocol end to end (Phase 3) |
+| **HV-4x** | In firmware, on target | Digital-input and E-STOP configuration (Phase 4) |
 
 HV-0x is implemented in
 `Firmware/Platform/STM32F407/Src/stepgen_selftest_stm32f4.c`
@@ -269,11 +272,26 @@ link never de-energises a stepper and lets an axis drift or drop under
 load. Verify with a meter on PD15, and mechanically by confirming the
 axis still resists being turned by hand.
 
-### HV-18 — E-STOP
+### HV-18 — E-STOP (**the one that matters**)
 
-Deferred to the phase implementing the PE2 EXTI handler. Recorded so it
-is not lost: measure PE2 edge → STEP low → `EN` low, with the engine at
-2 MHz on all five axes.
+The PE2 EXTI handler exists as of Phase 4 (M3), so this is now runnable.
+
+*Method.* Run HV-12's five-axis 2 MHz stimulus and flood the Ethernet link
+at the same time. Trigger the scope on the falling edge of `PE2` and
+capture `PE2`, one STEP pin and `EN` (`PD15`).
+
+*Measure.* `PE2` falling edge → last STEP edge, and `PE2` falling edge →
+`EN` low.
+
+*Pass.* Both intervals are bounded and repeatable over ≥ 100 presses, with
+no dependence on whether the link is loaded or how many axes are moving —
+that independence is the actual claim of `Docs/FIRMWARE-ARCHITECTURE.md`
+§8, and it is what the NVIC table in ADR-004 exists to deliver. Record the
+worst case; do not average.
+
+*Also check, in the same session:* the machine does **not** restart when
+the button is released (ADR-010: recovery is explicit), and a clear issued
+while the button is still down is refused (ADR-015 decision 4).
 
 ---
 
@@ -468,6 +486,101 @@ but "should" is the word HV tests exist to replace.
 
 ---
 
+## 5d. Digital input tests (HV-4x) — Phase 4 / M3
+
+Run by `safety_selftest_run_all()`
+(`Firmware/Platform/STM32F407/Src/safety_selftest_stm32f4.c`), which
+`main()` calls at boot when `CNC_RUN_SELFTEST_AT_BOOT` is set. Results are
+in `safety_selftest_results()`, readable over SWD.
+
+None of these asserts an E-STOP. Firing one at every boot to see whether it
+works would leave the controller in a latched `EMERGENCY_STOP` that an
+operator then has to clear, every boot. They check the conditions that make
+the E-STOP path work; **HV-18 checks the path itself**, on a scope, and
+neither substitutes for the other.
+
+### HV-40 — The E-STOP release interlock is registered
+
+*Method.* `stepgen_has_estop_gate()` and `safety_input_present()`.
+
+*Pass.* Both true.
+
+*Why it matters.* ADR-010 says `EMERGENCY_STOP` clears only once `PE2` has
+been released, and ADR-015 implements that as a predicate the motion engine
+holds. With nothing registered, the engine has no way to see `PE2` and a
+clear succeeds on the state machine alone — correct for the host test
+suite, wrong on a machine. This test is what tells the two apart.
+
+### HV-41 — EXTI and NVIC configuration
+
+*Method.* Read back `EXTI->IMR/RTSR/FTSR`, `SYSCFG->EXTICR[]`,
+`GPIOE->MODER/PUPDR` and the NVIC priorities.
+
+*Pass.* Lines 0–14 unmasked with both edges; every one selected onto port
+E; `PE0`–`PE14` inputs with no internal pull (external pull-ups are fitted,
+`Docs/PINOUT.md`); `EXTI2` at priority 0, the other five vectors at 1, and
+the STEP-DMA vector numerically above both (ADR-004).
+
+*Why it matters.* A line silently routed to the wrong port is a dead input,
+and one of the fifteen is the E-STOP. A priority inversion against the
+STEP-DMA refill would be invisible until it mattered.
+
+### HV-42 — All inputs read idle at rest
+
+*Method.* One `GPIOE->IDR` read with the machine's switches in their rest
+position.
+
+*Pass.* All fifteen read HIGH.
+
+*Why it matters.* A line stuck LOW is a wiring or pull-up fault, and if it
+is `PE2` the controller will refuse to leave `EMERGENCY_STOP`. Better to be
+told that by a numbered test than to debug it as "the machine will not
+start".
+
+*Caveat.* This test assumes nothing is holding a switch. On a machine
+parked on a limit it will fail correctly; note the reason and re-run.
+
+### HV-43 — Input ISR cost
+
+*Method.* DWT cycle count across `safety_input_on_edge()`, worst of 16,
+with `PE2` idle.
+
+*Pass.* Recorded, not thresholded — the firmware's 2000-cycle bound is a
+sanity limit, not a budget.
+
+*Why it matters.* These vectors sit above the STEP ring refill (ADR-004),
+so their cost comes out of the refill's 128 µs deadline every time an input
+moves. HV-04 holds the other half of that budget. This figure deliberately
+**excludes** the stop itself (HV-05) and NVIC entry latency (neither), so
+it is not an E-STOP latency number and must not be quoted as one.
+
+### HV-44 — Chatter does not reach the motion engine
+
+*Method.* Wire a real (ideally worn) mechanical switch to a non-E-STOP
+input. Operate it 50 times while HV-11's three-axis 2 MHz stimulus runs.
+
+*Pass.* STEP timing on the scope is unchanged; the reported input state
+changes exactly 50 times, not once per bounce; `safety_input_get_status()`
+reports the edges that were suppressed rather than pretending the contact
+was clean.
+
+### HV-45 — Debounce and release windows, measured (**replaces the defaults**)
+
+*Method.* Capture the raw `PE0`–`PE14` lines on a logic analyser while
+operating each switch the machine actually has, including the E-STOP
+button, ≥ 20 times each. Measure the longest bounce burst on assertion and
+on release.
+
+*Pass.* `SAFETY_DEBOUNCE_MS` and `SAFETY_ESTOP_RELEASE_MS` exceed the
+measured worst case with margin, and are then **set from this measurement**
+in `Firmware/Core/Inc/cnc_safety_config.h`.
+
+*Why it matters.* Those two constants are currently documented defaults,
+not measurements (ADR-015). Until this test runs, Rule 9 forbids describing
+them as validated.
+
+---
+
 ## 6. Results table
 
 `NOT RUN` is the correct entry until hardware exists. It must not be
@@ -489,7 +602,7 @@ replaced by an expectation.
 | HV-15 Ethernet isolation | NOT RUN | — | — | Phase 2 code now exists; needs the board |
 | HV-16 Underrun safety | NOT RUN | — | — | |
 | HV-17 Pause holds with EN live | NOT RUN | — | — | ADR-010 |
-| HV-18 E-STOP response | NOT RUN | — | — | Needs the EXTI phase |
+| HV-18 E-STOP response | NOT RUN | — | — | Runnable since Phase 4; **the one that matters** |
 | HV-20 PHY reset pulse | NOT RUN | — | — | ADR-013; also test a warm MCU reset |
 | HV-21 Buffers in SRAM1 | **PASS (static)** | `0x20000438`, `0x200004D8`, `0x20000580` | 2026-09-17 | Confirmed in the linked map; re-confirm at runtime on target |
 | HV-22 ETH IRQ priority | NOT RUN | — | — | ADR-012; expect 5, 5, 2 |
@@ -503,13 +616,20 @@ replaced by an expectation.
 | HV-34 Backpressure under a burst | NOT RUN | — | — | |
 | HV-35 A lost block stops the machine | NOT RUN | — | — | |
 | HV-36 Timing unaffected by protocol traffic | NOT RUN | — | — | Protocol-layer counterpart to HV-15 |
+| HV-40 E-STOP interlock registered | NOT RUN | — | — | ADR-010 / ADR-015 decision 4 |
+| HV-41 EXTI / NVIC configuration | NOT RUN | — | — | ADR-004; expect 0, 1, 2 |
+| HV-42 Inputs idle at rest | NOT RUN | — | — | Expect `0x7FFF` |
+| HV-43 Input ISR cost | NOT RUN | — | — | Not an E-STOP latency figure |
+| HV-44 Chatter isolation | NOT RUN | — | — | Needs a real switch |
+| HV-45 Debounce windows measured | NOT RUN | — | — | **Replaces ADR-015's defaults** |
 
 ---
 
 ## 7. What the host test suite already establishes
 
-`cd Firmware && make test` — 1150 motion checks, 130 network checks and
-302 protocol checks, all passing at the time of writing. The motion suite reconstructs the pin
+`cd Firmware && make test` — 1150 motion checks, 151 input/E-STOP checks,
+130 network checks and 316 protocol checks, all passing at the time of
+writing. The motion suite reconstructs the pin
 waveform from the BSRR word stream and the CPU-timed DIR writes, then
 measures it in nanoseconds, so it checks the same properties HV-1x will.
 
@@ -519,6 +639,14 @@ a speed on a down link, and that the configuration constants still hold
 the values the documents fix and still satisfy ADR-011/012/013's
 invariants. It establishes **nothing** about the PHY, the MAC, the reset
 pulse or the wire — those are HV-20..HV-25, and they need the board.
+
+The input suite (`make test-safety`) drives the safety core against the
+real motion engine too, on a host simulation of EXTI, so "the E-STOP fires"
+is checked by asking the engine what state it reached and "the machine will
+not restart" by actually being refused a clear. It establishes the filter's
+timing in milliseconds and the polarity normalisation the protocol depends
+on. It establishes **nothing** about EXTI, the NVIC, or how long any of it
+takes on silicon — those are HV-40..HV-45 and HV-18.
 
 The protocol suite (`make test-proto`) drives the session against the real
 motion engine on its simulation port, so backpressure, abort and the

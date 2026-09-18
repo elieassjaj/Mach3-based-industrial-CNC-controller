@@ -22,7 +22,7 @@ Module boundaries below follow the logical decomposition already fixed in `Docs/
 |---|---|---|---|
 | M1 | `System/State` | Central state model (e.g. `BOOT → INITIALIZING → READY → RUNNING → FAULT/EMERGENCY_STOP`); motion outputs must not enable before a known-safe state is reached | FIRMWARE-ARCHITECTURE §24, §31, §32 |
 | M2 | `System/Fault` | Aggregates faults (E-stop, motion fault, Ethernet fault, invalid packet, buffer underflow, DMA/timer fault, init failure) into a safe response | FIRMWARE-ARCHITECTURE §23 |
-| M3 | `Safety` (Input Manager) | Service `PE0`–`PE14` via EXTI (already configured, both edges, `GPIO_NOPULL` — board has external pull-ups); `PE2` (E-STOP) is latency-critical and hardware-isolated from the network | PINOUT.md, FIRMWARE-ARCHITECTURE §7–8, ADR-004 (NVIC: `EXTI2_IRQn` priority 0, other EXTI priority 1) |
+| M3 | `Safety` (Input Manager) | Service `PE0`–`PE14` via EXTI (both edges, `GPIO_NOPULL` — board has external pull-ups); `PE2` (E-STOP) is latency-critical and hardware-isolated from the network | **Implemented (Phase 4)** — `Safety/Src/safety_input.c` + `Platform/STM32F407/Src/safety_port_stm32f4.c`; decisions in ADR-015 |
 | M4 | `Motion/StepGen` | Own the STEP BSRR double-buffer and the `TIM2`→`DMA1_Stream1`→`GPIOA->BSRR` transfer (already configured: PSC 0/ARR 20 = 4 MHz tick); refill on DMA half/full-transfer interrupt | ADR-001, ADR-002, ADR-004; MOTION-ENGINE §9–11 |
 | M5 | `Motion/Interpolation` | Per-tick decision of which of the 5 axis bits (`PA8`–`PA12` = X,Y,Z,A,B) go into each BSRR word, for axes running at or below 2 MHz simultaneously | ADR-004 (fixes tick rate only, not the algorithm); MOTION-ENGINE §14–15, §27 |
 | M6 | `Motion/Axis` | Per-axis state: position, direction, enable, target/commanded values | MOTION-ENGINE §23 (representation `[TBD]`) |
@@ -30,7 +30,7 @@ Module boundaries below follow the logical decomposition already fixed in `Docs/
 | M8 | `Motion/Planner` | Consume trajectory/command input, maintain the motion buffer, feed M5/M7 | MOTION-ENGINE §13, §16 (buffering strategy `[TBD]`); MACH3-INTERFACE.md §3–4 (shape of the input once the protocol exists) |
 | M9 | `IO/Outputs` | Relay (`PB8`) and status LEDs (`PB2` run, `PB1` error) | PINOUT.md (relay polarity **not yet documented** — see §4) |
 | M10 | `IO/Spindle` | Spindle PWM duty control over the already-configured `TIM3_CH1`/`PB4`, 10 kHz | PINOUT.md, ADR (TIM3 PSC 83/ARR 99 confirmed in `.ioc`) |
-| M11 | `IO/DigitalInput` | Expose the non-E-STOP `PE0/1/3–14` states in a form the protocol layer / Mach3 signal table can consume | MACH3-INTERFACE.md §4 (`GetInputs()`/`Engine->InSigs[]` reference behavior) |
+| M11 | `IO/DigitalInput` | Expose the non-E-STOP `PE0/1/3–14` states in a form the protocol layer / Mach3 signal table can consume | **Implemented (Phase 4), folded into M3** — one `GPIOE` read is a complete sample of all 15, so a second module would have been a second copy of the same word. `safety_inputs()` feeds `STATUS.inputs` (ADR-015 decision 3) |
 | M12 | `Communication/Ethernet` | Own PHY/link bring-up (LAN8742-compatible driver already wired), static IP (`192.168.5.10/24`, confirmed), `MX_LWIP_Process()` pump (already called from `main()`) | Docs/ETHERNET.md §2.2, §15–16 |
 | M13 | `Communication/UDP` | Open/bind the motion UDP socket, send/receive datagrams | **Implemented (Phase 3)** — `Platform/STM32F407/Src/net_udp_stm32f4.c`, UDP 55010 (ADR-014) |
 | M14 | `Communication/Protocol` | Parse/validate inbound packets into internal motion commands; encode outbound status/feedback | **Implemented (Phase 3)** — `Net/Src/cnc_protocol.c` + `Net/Src/cnc_session.c`; format in `Docs/PROTOCOL.md` |
@@ -42,7 +42,9 @@ Module boundaries below follow the logical decomposition already fixed in `Docs/
 
 ## 3. Parts that depend on the still-open Mach3 UDP protocol
 
-> **Phase 3 closed this section's central dependency.** The protocol is specified in `Docs/PROTOCOL.md` and implemented: port number, packet format, motion encoding, feedback format, backpressure mechanism and comm-timeout threshold are all decided (ADR-014). M13 and M14 are built and host-tested. What remains open below is what depends on *other* missing modules — M3 for inputs, M9/M10 for outputs — and the plugin itself, not on the protocol.
+> **Phase 3 closed this section's central dependency.** The protocol is specified in `Docs/PROTOCOL.md` and implemented: port number, packet format, motion encoding, feedback format, backpressure mechanism and comm-timeout threshold are all decided (ADR-014). M13 and M14 are built and host-tested.
+>
+> **Phase 4 closed the input half.** M3 and M11 are built and host-tested (ADR-015). `STATUS.inputs` carries real readings, `flags.5` says so, and ADR-010's "never clear an E-stop while the input is still down" is now enforced rather than merely documented. What remains open is M9/M10 for outputs and the PC-side plugin.
 
 Everything else in this plan can be implemented and bench-tested without Mach3 or a PC. These cannot:
 
@@ -52,7 +54,7 @@ Everything else in this plan can be implemented and bench-tested without Mach3 o
 | M14 `Communication/Protocol` | Nothing to parse without a wire format | Packet header/opcode/sequence/CRC (`Docs/ETHERNET.md` §11); which of GMoves-style segments vs. `ncPod`-style time-sliced velocities (`Docs/MACH3-INTERFACE.md` §3–4) this project uses; feedback packet contents |
 | M8 `Motion/Planner` (its *input side* only) | The buffer's producer is the protocol layer | Same as M14, plus the slice duration / block size this project adopts (the `ncPod` reference is evidence, at ~50 Hz / ~128 ms buffered — `Docs/MACH3-INTERFACE.md` §4 — not a decision) |
 | M6 `Motion/Axis` (host-sync fields only) | Mach3 is natively 6-axis (X,Y,Z,A,B,**C**), this controller is 5 | Explicit axis-index mapping so C is never silently misrouted (`Docs/MACH3-INTERFACE.md` §3) |
-| M11 `IO/DigitalInput` (feedback path only) | Bit layout of the input-state packet isn't defined | Feedback packet format |
+| ~~M11 `IO/DigitalInput` (feedback path only)~~ | ~~Bit layout of the input-state packet isn't defined~~ | **Resolved** — `STATUS.inputs`, bit *n* = `PE`*n*, 1 = asserted (ADR-015 decision 3) |
 | Mach3 PC-side plugin | Entirely separate deliverable | Everything above, plus a repository location for it (`Docs/MACH3-INTERFACE.md` §7 — none reserved yet) |
 
 M4/M5/M7/M9/M10/M3/M12 have **no** dependency on the protocol — they can be fully implemented and verified against real hardware (a scope, a logic analyzer, a bench 24 V/5 V supply, and a plain `ping`) before the protocol exists at all. This is deliberate: it lets the highest-technical-risk part of the project (the 3-axis-at-2 MHz DMA/BSRR claim, MOTION-ENGINE §30) get real-hardware evidence long before Mach3 integration is even possible.
@@ -86,9 +88,9 @@ Ordered so that the highest-risk, protocol-independent subsystems get real-hardw
 Implement the state machine and fault aggregation with the states frozen in §4.5, wire the run/error LEDs to it. This is small enough to be the first thing that runs on real hardware, and satisfies the startup-safety requirement (FIRMWARE-ARCHITECTURE §32) that nothing else in this plan may violate.
 *Verify:* power-on behavior on the real board — LED reflects state transitions, no unintended STEP/DIR/relay/spindle activity during boot (scope on a couple of representative pins is enough).
 
-**Phase 1 — Safety / Input Manager (M3)**
-EXTI callback wiring; `PE2` drives M2 directly and independently of everything else; the other 14 inputs just capture state for now (their Mach3-facing meaning is protocol-layer work, §3).
-*Verify:* toggle each input by hand; measure E-STOP response latency with a logic analyzer — this must hold regardless of what Phase 3 is doing on the STEP outputs, which is the point of ADR-004's priority scheme (EXTI2 above the DMA refill interrupt).
+**Phase 1 — Safety / Input Manager (M3)** — **done, out of order (built as Phase 4)**
+EXTI wiring at register level; `PE2` reaches the motion engine directly and independently of everything else; the other 14 inputs capture state only (their Mach3-facing meaning is host-side, ADR-010/ADR-015 decision 5). Built after the motion, Ethernet and protocol phases rather than before them, because those three carried the project's technical risk and this one did not — but note what that ordering cost: every phase before this one ran with an E-STOP that existed on paper only.
+*Verify:* toggle each input by hand; measure E-STOP response latency with a logic analyzer — this must hold regardless of what the motion phase is doing on the STEP outputs, which is the point of ADR-004's priority scheme (EXTI2 above the DMA refill interrupt). That is HV-18, and it has **not** been run — `Docs/HARDWARE-VALIDATION.md` §5d.
 
 **Phase 2 — Output Management (M9 complete, M10)**
 Relay and spindle PWM duty control. Needs §4.6 (relay polarity) resolved first.

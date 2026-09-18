@@ -2128,6 +2128,127 @@ and no new buffers. The motion queue is Phase 1's existing 64 slots.
 
 **Validation result:** Host tests pass; hardware TBD.
 
+---
+
+### ADR-015 — Digital Input Manager and the E-STOP Path
+
+**Status:** ACCEPTED for Phase 4 (M3). Implemented in `Firmware/Safety/`
+and `Firmware/Platform/*/Src/safety_port_*.c`.
+
+**Context.** Section 7 fixes the hardware (15 active-low inputs on
+`PE0`–`PE14`, external pull-ups, both-edge EXTI, `PE2` = E-STOP) and
+Section 20 requires a dedicated Input Manager, but both deliberately leave
+the handling method open: "the implementation must determine whether each
+input requires ... software filtering ... event latching ... immediate
+safety action". ADR-004 already fixed the interrupt priorities; ADR-010
+already fixed what an E-STOP does to the state machine, and added one
+clause the firmware could not yet honour — that `EMERGENCY_STOP` may only
+clear once the physical input has been released. This ADR decides the five
+things that were left open.
+
+**Decision.**
+
+1. **Level-based, never edge-count-based.** Every ISR re-reads `GPIOE->IDR`
+   and the superloop re-reads it again on each poll. Five of the six input
+   vectors are shared between lines, an EXTI pending bit can coalesce two
+   transitions, and a line can be masked by a self-test — under all three,
+   an edge *count* desynchronises and a level *read* does not. The one case
+   this also covers is the one that matters most: an E-STOP already held
+   down at power-on has no edge left to give, and only its level says so.
+
+2. **Assertion is immediate; release is filtered.** The 14 ordinary inputs
+   get a symmetric stable-for-`SAFETY_DEBOUNCE_MS` filter in both
+   directions. `PE2` does not: an assertion is acted on inside the EXTI2
+   ISR with no filtering at all, and only the *release* is filtered, over a
+   longer window (`SAFETY_ESTOP_RELEASE_MS`). The asymmetry is the safety
+   property. Filtering an assertion would add latency to the one path
+   Section 8 requires to be the fastest in the system; not filtering the
+   release would let a bouncing or intermittent contact present itself as
+   "released" and unlock a machine. Nothing about unlocking a machine is
+   time-critical, so the two directions are not allowed to share a number.
+
+3. **Published as logical assertion, not as pin level.** Every bitfield the
+   subsystem exposes — including `Docs/PROTOCOL.md` §6's `inputs` — uses
+   bit *n* = `PE`*n*, **1 = asserted**, i.e. the pin reads LOW. The
+   alternative, publishing raw levels, makes an all-zero word mean "every
+   input asserted", which is precisely the reading §6.2's `INPUTS_PRESENT`
+   flag exists to make impossible to confuse with "no data". It also keeps
+   the board's electrical polarity out of the host: the plugin applies
+   Mach3's own per-signal `Negated` flags to a logical word, exactly as
+   `ncPod` does with `PodStatus.inio` (`Docs/MACH3-INTERFACE.md` §4).
+
+4. **The E-STOP release interlock is a predicate the engine holds, not a
+   check at a call site.** ADR-010 requires that a clear be refused while
+   `PE2` still reads asserted. The motion engine owns the STEP/DIR pins and
+   cannot see `PE2`, so `stepgen_set_estop_gate()` takes a predicate and
+   `safety_input_init()` registers `safety_estop_released()` into it. The
+   interlock therefore exists as soon as the subsystem does and cannot be
+   forgotten by a caller — the protocol layer's `CONTROL:CLEAR_ESTOP` gets
+   it for free, and so does any future path.
+
+5. **No per-input meaning is assigned in firmware.** ADR-010 already
+   settled that the mapping from a pin to "X+ limit" or "probe" is
+   host-side (`Engine->InSigs[]`). M3 therefore reports all 15 states
+   accurately and promptly and decides nothing about them. The single
+   exception is `PE2`, whose meaning is fixed by `Docs/PINOUT.md` and
+   Section 8, not chosen here.
+
+**Chosen values (OPEN, not measured):** `SAFETY_DEBOUNCE_MS` = 3,
+`SAFETY_ESTOP_RELEASE_MS` = 50, `SAFETY_CHATTER_EDGES_PER_S` = 200. No
+switch datasheet exists in this repository, so these are documented
+defaults above typical mechanical bounce, not derived values. Rule 9
+applies: HV-45 replaces them with measured ones, and until it has run they
+must not be described as validated.
+
+**Alternatives considered:**
+
+- *Polling instead of EXTI* — rejected: Section 7 and `Docs/PINOUT.md` both
+  require interrupt handling, and a poll fast enough for E-STOP would cost
+  more than the interrupt it replaces.
+- *Debouncing the E-STOP assertion too* — rejected, see decision 2.
+- *Hardware RC filtering* — not rejected, out of scope: this is a firmware
+  document and the board is what it is. Software filtering is what M3 can
+  provide; if HV-45 finds a contact that needs hardware, that is a hardware
+  change.
+- *Publishing raw pin levels* — rejected, see decision 3.
+- *Checking the E-STOP input inside the protocol layer's `CLEAR_ESTOP`
+  handler* — rejected: it works, and it is one forgotten call site away
+  from not working. A registered predicate cannot be bypassed by adding a
+  second caller.
+- *Letting a released E-STOP clear itself* — rejected outright by ADR-010's
+  confirmed "recovery is never automatic". The release grants permission
+  for an explicit clear and does nothing else.
+
+**Timing impact:** The EXTI vectors sit at NVIC priority 0 (`PE2`) and 1
+(the rest), both **above** the STEP ring refill at 2 (ADR-004) — which is
+the point, and also means input ISR time is subtracted from the refill's
+128 µs deadline whenever an input moves. HV-43 measures that cost and HV-04
+holds the other half of the budget. The E-STOP path itself is HV-05 plus
+HV-18.
+
+**Memory impact:** ~250 bytes of static state (per-input filter timestamps
+and edge counters), no dynamic allocation, no new buffers.
+
+**CPU impact:** One `IDR` read plus a few instructions per edge; one pass
+over 15 bits per superloop iteration. A chattering contact is the only way
+this becomes significant, which is why it is counted and reported.
+
+**Risks:**
+
+1. The three timing constants are defaults, not measurements (see above).
+2. The debounce runs on the 1 ms `HAL_GetTick()` timebase, so the effective
+   window is `[T, T+1]` ms. Adequate at 3 ms; it would not be at 1 ms.
+3. `s.estop_asserted` is written by both the ISR (assert) and the release
+   timer (clear). The clear re-reads the pin immediately afterwards to
+   close that window rather than masking EXTI2, because a briefly deaf
+   E-STOP line is not an acceptable trade at any price. The residual window
+   is one port read wide.
+4. Everything above is verified on a host simulation of EXTI. Nothing has
+   been measured on silicon — HV-40..HV-43 and HV-18/HV-45 are the tests
+   that change that, and Rule 10 forbids claiming otherwise until they run.
+
+**Validation result:** Host tests pass (151 checks); hardware TBD.
+
 # 42. AI-Assisted Development Rules
 
 This repository is intended to support AI-assisted firmware development.

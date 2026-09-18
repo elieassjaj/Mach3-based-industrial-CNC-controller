@@ -144,7 +144,7 @@ Mach3 plugins use MFC's `CAsyncSocket`. The SDK's `CUDPSocket` wrapper creates a
 | Slice duration and block size for our own protocol | **RESOLVED** — host-chosen `slice_us`, up to 32 records per block; 4 ms × 32 recommended, `Docs/PROTOCOL.md` §8 |
 | Device→host status packet contents and rate | **RESOLVED** — 96-byte `STATUS` at 50 Hz, `Docs/PROTOCOL.md` §6 |
 | Mapping of Mach3's 6 axes onto this controller's 5 | **RESOLVED** — five wire slots X,Y,Z,A,B; **no C field exists at any offset**, `Docs/PROTOCOL.md` §5.5 |
-| Homing, probing, spindle and jog command encodings | `[TBD]` for homing and probing (both need M3). Jog and dwell need no opcode — they are ordinary motion blocks. Spindle/relay have a fixed wire format that the firmware answers `NOT_IMPLEMENTED` until M9/M10 exist — `Docs/PROTOCOL.md` §9, §10 |
+| Homing, probing, spindle and jog command encodings | `[TBD]`, but the blocker moved: M3 exists as of Phase 4, so the inputs are readable. Homing still needs a per-input *meaning* (host-side, ADR-010/ADR-015) and a command encoding; probing needs a position-capture path in the input ISR, which M3 deliberately does not have — a 50 Hz status word is not a probe capture. Jog and dwell need no opcode — they are ordinary motion blocks. Spindle/relay have a fixed wire format that the firmware answers `NOT_IMPLEMENTED` until M9/M10 exist — `Docs/PROTOCOL.md` §9, §10 |
 | Mach3 version/licence constraints for plugin distribution | `[TBD]` |
 
 The SDK archives in `MACH3/` remain the authority for anything host-side.
@@ -159,3 +159,43 @@ The SDK archives in `MACH3/` remain the authority for anything host-side.
 4. **Close the position loop from `pos_output[]`.** The device is never more than one step behind but is, in general, one step behind — `Docs/PROTOCOL.md` §5.3.
 5. **Stop on any latched `proto_faults` bit and require operator action.** Clearing and continuing past a `SEQ_GAP` means cutting a path with a hole in it.
 6. **Check `tick_hz` from `INFO`** before choosing `slice_us`, so the slice converts exactly, and before trusting a feed rate to be inside the device ceiling.
+
+---
+
+## 9. What M3 gives the plugin (Phase 4)
+
+`[DESIGN-IMPLICATION]` The input manager exists, so `GetInputs()` now has a
+real source. Three things follow, and the first is the one a plugin author
+is most likely to get wrong:
+
+1. **`STATUS.inputs` is already normalised to logical assertion.** Bit *n*
+   is set when `PE`*n* is asserted, not when the pin is HIGH. The board's
+   inputs are active low; the firmware applies that once (ADR-015) so the
+   plugin does not. What the plugin *does* apply is Mach3's own per-signal
+   `Negated` flag when writing `Engine->InSigs[]`, exactly as `ncPod` does
+   from `Pod->PodStatus.inio` — that flag is machine configuration, not
+   board polarity, and the two must not be conflated.
+
+2. **Which pin means what is the plugin's decision, and nothing in this
+   repository has made it.** The firmware assigns no meaning to any input
+   except `PE2`. There is no "X+ limit is `PE5`" anywhere, deliberately
+   (ADR-010, ADR-015 decision 5). The plugin owns that table, and
+   `ncPod`'s `GetInputs()` — bit → `InSigs[]` index, honouring `Negated`,
+   raising `Engine->EStop` on a limit — is the reference shape for it.
+
+3. **`inputs` is a 50 Hz state report, not an event stream and not a
+   capture.** It is adequate for limits and for anything Mach3 polls. It is
+   **not** adequate for probing, which needs the machine position latched
+   at the probe edge, in the interrupt — that path does not exist
+   (`Docs/PROTOCOL.md` §10, §11). A plugin must not synthesise a probe hit
+   from two status packets.
+
+Two firmware-side facts worth knowing host-side:
+
+- The E-STOP input is reported (bit 2) **and** independently visible as the
+  engine's own `EMERGENCY_STOP` in `STATUS.state`. Those are two different
+  observations of the same event and either can arrive first; the machine
+  is already stopped before either is transmitted.
+- `CONTROL:CLEAR_ESTOP` is refused while `PE2` still reads asserted, and
+  for a further release-stabilisation window after that. A plugin should
+  expect `WRONG_STATE` and retry, not treat the first refusal as an error.

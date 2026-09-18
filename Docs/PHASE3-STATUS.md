@@ -279,10 +279,12 @@ Beyond the six obligations now recorded in `Docs/MACH3-INTERFACE.md` §8:
 2. **The plugin's `SendHoldingMovement()` maps onto `MOTION`**, and it must
    do the `GMoves` → time-sliced conversion host-side (ADR-007). The
    firmware will not accept anything else.
-3. **`GetInputs()` has nothing to read yet.** `STATUS.inputs` is zero until
-   M3 exists, and `flags.5` says so. A plugin must check that bit rather
-   than publishing zeros into Mach3's signal table as if every switch were
-   open.
+3. ~~**`GetInputs()` has nothing to read yet.**~~ **Superseded by Phase 4:**
+   M3 exists, `STATUS.inputs` carries real readings and `flags.5` is set
+   once the subsystem has initialised. The instruction stands unchanged — a
+   plugin must still check that bit rather than publishing zeros into
+   Mach3's signal table as if every switch were open — but the bit is now
+   normally 1. See `Docs/PHASE4-STATUS.md` and `Docs/MACH3-INTERFACE.md` §9.
 4. **`SetOutputs()` and spindle control will be refused** until M9/M10.
 5. **`MyJogOn`/`MyJogOff` and `myDwell` need no new opcode** — both are
    ordinary motion blocks. If that proves inadequate in practice, that is

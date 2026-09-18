@@ -17,7 +17,10 @@ waveform be verified on a host, and what keeps the Phase 2/3 network and
 protocol layers independent of the motion engine.
 
 See `../Docs/PHASE1-STATUS.md` for results, assumptions and blockers, and
-`../Docs/HARDWARE-VALIDATION.md` for the bring-up procedure.
+`../Docs/HARDWARE-VALIDATION.md` for the bring-up procedure. The E-STOP
+input that drives `stepgen_emergency_stop()` is Phase 4's — see
+`NET-README.md` for the network layer and `SAFETY-README.md` for the
+inputs.
 
 ---
 
@@ -106,11 +109,16 @@ it also happens while the engine is waiting for a pending DIR reversal to
 be written.
 
 `stepgen_emergency_stop()` is interrupt-safe and does register writes
-only, so the PE2 E-STOP handler can call it directly.
+only, so the PE2 E-STOP handler calls it directly — it does, as of Phase 4
+(`Safety/`), from inside `EXTI2_IRQHandler` at NVIC priority 0.
 
 Fault recovery is never automatic (ADR-010): `stepgen_clear_fault()` for a
 `FAULT`, and `stepgen_clear_emergency_stop()` for an E-stop — the former
-cannot clear the latter.
+cannot clear the latter, and neither can clear an E-stop whose input is
+still asserted. That last interlock is a predicate the safety subsystem
+registers with `stepgen_set_estop_gate()`; with nothing registered there is
+no physical interlock at all, which is what the on-target test HV-40
+checks.
 
 ---
 

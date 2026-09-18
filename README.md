@@ -117,6 +117,7 @@ Mach3-based-industrial-CNC-controller/
 │   ├── PHASE1-STATUS.md
 │   ├── PHASE2-STATUS.md
 │   ├── PHASE3-STATUS.md
+│   ├── PHASE4-STATUS.md
 │   ├── PINOUT.md
 │   ├── PROTOCOL.md
 │   ├── PRE-IMPLEMENTATION-DECISIONS.md
@@ -136,6 +137,7 @@ Mach3-based-industrial-CNC-controller/
 │   │   └── Target/                 ethernetif.c, lwipopts.h
 │   ├── Middlewares/Third_Party/LwIP/
 │   ├── Motion/                     portable STEP/DIR engine (Phase 1)
+│   ├── Safety/                     portable input manager + E-STOP (Phase 4)
 │   ├── Net/                        portable network config, link observer,
 │   │                               C5P1 protocol (Phases 2-3)
 │   ├── Platform/
@@ -145,6 +147,7 @@ Mach3-based-industrial-CNC-controller/
 │   ├── Makefile                    test | arm | firmware
 │   ├── MOTION-README.md
 │   ├── NET-README.md
+│   ├── SAFETY-README.md
 │   ├── STM32F407VGTX_FLASH.ld
 │   ├── STM32F407VGTX_RAM.ld
 │   └── .project, .cproject, .mxproject, .settings/
@@ -192,6 +195,7 @@ Mach3-based-industrial-CNC-controller/
 | [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) | Phase 1 (motion engine) results, assumptions, blockers and open risks |
 | [`Docs/PHASE2-STATUS.md`](Docs/PHASE2-STATUS.md) | Phase 2 (Ethernet/LwIP) results, the reverted-static-IP finding, assumptions and risks |
 | [`Docs/PHASE3-STATUS.md`](Docs/PHASE3-STATUS.md) | Phase 3 (UDP + protocol) results, decisions, risks and what Phase 4 must know |
+| [`Docs/PHASE4-STATUS.md`](Docs/PHASE4-STATUS.md) | Phase 4 (digital inputs + E-STOP, M3) results, decisions, risks and what the plugin must know |
 | [`Docs/PROTOCOL.md`](Docs/PROTOCOL.md) | **Authoritative C5P1 wire format**: framing, opcodes, motion encoding, sequencing, flow control, status |
 | [`Docs/MACH3-INTERFACE.md`](Docs/MACH3-INTERFACE.md) | How Mach3 drives an external motion device, established from the SDK |
 | [`Docs/FIRMWARE-IMPLEMENTATION-PLAN.md`](Docs/FIRMWARE-IMPLEMENTATION-PLAN.md) | Firmware module breakdown, protocol dependencies, frozen-assumption list, implementation/verification order |
@@ -216,17 +220,18 @@ Mach3-based-industrial-CNC-controller/
 
 ## Firmware Project State
 
-`Firmware/` contains an STM32CubeIDE project (`CNC5AX-ETH.ioc`, CubeMX 6.15.0, STM32Cube FW_F4 V1.28.0, target `STM32F407VGT6`/LQFP100) carrying the CubeMX-generated startup, clock, GPIO, DMA, timer, EXTI/NVIC and LwIP scaffolding, plus two implemented subsystems:
+`Firmware/` contains an STM32CubeIDE project (`CNC5AX-ETH.ioc`, CubeMX 6.15.0, STM32Cube FW_F4 V1.28.0, target `STM32F407VGT6`/LQFP100) carrying the CubeMX-generated startup, clock, GPIO, DMA, timer, EXTI/NVIC and LwIP scaffolding, plus four implemented subsystems:
 
 | Phase | Subsystem | State |
 |---|---|---|
 | 1 | Motion engine — STEP/DIR generation (`Motion/`, `Platform/STM32F407/`) | Implemented, 1150 host checks, integrated and linking. **Not hardware-validated** — see [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) |
 | 2 | Ethernet/LwIP bring-up, M12 (`Net/`, `Platform/STM32F407/`) | Implemented, 130 host checks, whole firmware links. **No link has been established on real hardware** — see [`Docs/PHASE2-STATUS.md`](Docs/PHASE2-STATUS.md) |
-| 3 | UDP + motion protocol, M13/M14 (`Net/`, `Tools/c5p1.py`) | Implemented, 302 host checks. **No datagram has crossed real Ethernet** — see [`Docs/PHASE3-STATUS.md`](Docs/PHASE3-STATUS.md) |
+| 3 | UDP + motion protocol, M13/M14 (`Net/`, `Tools/c5p1.py`) | Implemented, 316 host checks. **No datagram has crossed real Ethernet** — see [`Docs/PHASE3-STATUS.md`](Docs/PHASE3-STATUS.md) |
+| 4 | Digital inputs + E-STOP, M3/M11 (`Safety/`, `Platform/STM32F407/`) | Implemented, 151 host checks. `STATUS.inputs` is live and ADR-010's E-STOP release interlock is enforced. **No button has been pressed on a board** — see [`Docs/PHASE4-STATUS.md`](Docs/PHASE4-STATUS.md) |
 
-Neither phase may be reported as compliant with any requirement it has not measured on the board; both are gated on the prototype PCB. `Firmware/MOTION-README.md` and `Firmware/NET-README.md` cover building and the CubeIDE project settings each subsystem needs.
+No phase may be reported as compliant with any requirement it has not measured on the board; all four are gated on the prototype PCB. `Firmware/MOTION-README.md`, `Firmware/NET-README.md` and `Firmware/SAFETY-README.md` cover building and the CubeIDE project settings each subsystem needs.
 
-Still unwritten: the Mach3 host plugin (Phase 4), the input manager (M3) and the output/spindle modules (M9/M10). The protocol those need is now specified and implemented — [`Docs/PROTOCOL.md`](Docs/PROTOCOL.md) — and `Tools/c5p1.py` drives the controller from a PC without Mach3.
+Still unwritten: the Mach3 host plugin and the output/spindle modules (M9/M10). The protocol they need is specified and implemented — [`Docs/PROTOCOL.md`](Docs/PROTOCOL.md) — and `Tools/c5p1.py` drives the controller from a PC without Mach3.
 
 ### What the generated configuration establishes
 
@@ -256,7 +261,9 @@ Listed so they are not mistaken for working functionality:
 
 - **Nothing above has been confirmed on hardware.** Every claim is from source, the linker map and host tests. The 2 MHz three-axis requirement (HV-11) and the Ethernet timing-isolation requirement (HV-15) are both unmeasured, and `Docs/MOTION-ENGINE.md` Rule 8 forbids claiming either until they are.
 - TIM3 (spindle PWM) is initialized but never started; there is no output manager yet (M9/M10).
-- No UDP socket layer, protocol layer or Mach3 integration — blocked on the packet format and port number.
+- No Mach3 integration: the UDP and protocol layers exist (Phase 3) but nothing on the PC side speaks to them except `Tools/c5p1.py`.
+- The digital-input debounce windows (3 ms, 50 ms) are documented defaults, not measurements — HV-45 is the test that replaces them (ADR-015).
+- Probing has no capture path: `STATUS.inputs` is a 50 Hz state report, and a probe needs the position latched at the edge.
 - Watchdog, heap/stack sizes and LwIP memory sizing are still at CubeMX defaults. MAC and IP are no longer: both come from `Firmware/Net/Inc/net_config.h` as of Phase 2.
 - PHY SMI address is auto-scanned by the LAN8742 driver rather than assumed, which resolves the address-strap ambiguity noted in `Docs/ETHERNET.md`. The value the scan actually finds is recorded by HV-25 and is still unknown.
 - A CubeMX regeneration remains the main hazard to both subsystems: it silently reverted the static IP configuration once already (`Docs/PHASE2-STATUS.md` §2). Run the self-tests after every regeneration.
@@ -442,11 +449,12 @@ This repository is intended to be developed with AI assistance. The following ru
 | CubeMX `.ioc` peripheral configuration | Clock, GPIO, EXTI/NVIC, TIM8 + DMA2, TIM3 spindle PWM, Ethernet RMII and LwIP (static IP) configured |
 | Ethernet bring-up code (M12, Phase 2) | **Implemented** — ADR-013 PHY reset pulse, ADR-011 MAC, static IP restored and made regeneration-proof, portable link observer. 130 host checks passing. **No link established on hardware** — see [`Docs/PHASE2-STATUS.md`](Docs/PHASE2-STATUS.md) |
 | Motion engine / STEP generation code | **Implemented and integrated (Phase 1)** — DDA step generator, DMA→BSRR ring, ADR-006 CPU-timed DIR, ADR-010 state model. 1150 host checks passing |
-| Full firmware build | **Links clean**, motion + network. `make firmware` verifies the whole image, including the generated files; Ethernet buffers confirmed in SRAM1 and the STEP ring in SRAM2 |
+| Full firmware build | **Links clean**, motion + network + inputs. `make firmware` verifies the whole image, including the generated files; Ethernet buffers confirmed in SRAM1 and the STEP ring in SRAM2 |
 | Motion hardware validation plan | **Written** — [`Docs/HARDWARE-VALIDATION.md`](Docs/HARDWARE-VALIDATION.md), plus on-target self-tests HV-00..HV-05 |
-| On-target self-tests | Implemented — HV-00..HV-05 (motion) and HV-20..HV-25 (network); **not yet run** (no hardware available) |
+| On-target self-tests | Implemented — HV-00..HV-05 (motion), HV-20..HV-25 (network) and HV-40..HV-43 (inputs); **not yet run** (no hardware available) |
 | Measured CPU headroom | **Not measured** — estimated ~60-70% duty at the 2 MHz ceiling; scales down with `stepgen_configure_max_rate()` (1 MHz ceiling ≈ half). HV-04 is the gate. See RISK-1 in [`Docs/PHASE1-STATUS.md`](Docs/PHASE1-STATUS.md) |
-| Mach3 host-side plugin | Not started. Its obligations are recorded in [`Docs/MACH3-INTERFACE.md`](Docs/MACH3-INTERFACE.md) §8 |
+| Digital inputs / E-STOP path (M3, Phase 4) | **Implemented** — register-level EXTI, assert-immediately/release-filtered E-STOP, ADR-010's physical-release interlock enforced, `STATUS.inputs` live. 151 host checks passing. **Not hardware-validated** — HV-18 and HV-40..HV-45 — see [`Docs/PHASE4-STATUS.md`](Docs/PHASE4-STATUS.md) |
+| Mach3 host-side plugin | Not started. Its obligations are recorded in [`Docs/MACH3-INTERFACE.md`](Docs/MACH3-INTERFACE.md) §8 and §9 |
 | Final UDP application protocol | **C5P1 v1 on UDP 55010** — specified in [`Docs/PROTOCOL.md`](Docs/PROTOCOL.md), implemented and host-tested (ADR-014) |
 | PC-side test client | `Tools/c5p1.py` — drives the controller without Mach3; verified byte-for-byte against the firmware codec |
 | Verified 3-axis @ 2 MHz performance | **Not validated** — requires HV-11 on real hardware; explicitly not claimed |

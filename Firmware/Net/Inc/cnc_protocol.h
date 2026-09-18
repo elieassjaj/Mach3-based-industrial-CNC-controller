@@ -121,7 +121,7 @@ typedef enum {
 #define CNC_SFLAG_HOST_KNOWN     (1u << 2)
 #define CNC_SFLAG_MOTION_SYNCED  (1u << 3)
 #define CNC_SFLAG_MOTION_ACTIVE  (1u << 4)
-#define CNC_SFLAG_INPUTS_PRESENT (1u << 5)   /**< 0 until M3 exists  */
+#define CNC_SFLAG_INPUTS_PRESENT (1u << 5)   /**< M3 has initialised */
 #define CNC_SFLAG_OUTPUTS_PRESENT (1u << 6)  /**< 0 until M9/M10     */
 
 /* ------------------------------------------------- decoded structures -- */

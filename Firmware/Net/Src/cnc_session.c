@@ -6,6 +6,7 @@
 
 #include "net_config.h"
 #include "net_link.h"
+#include "safety_input.h"
 #include "stepgen.h"
 
 #include <string.h>
@@ -346,9 +347,17 @@ void cnc_session_get_status(cnc_status_t *out)
     if (s.host_known)      { flags |= CNC_SFLAG_HOST_KNOWN; }
     if (s.motion_synced)   { flags |= CNC_SFLAG_MOTION_SYNCED; }
     if (s.motion_active)   { flags |= CNC_SFLAG_MOTION_ACTIVE; }
-    /* INPUTS_PRESENT / OUTPUTS_PRESENT stay clear until M3 and M9/M10
-     * exist. Reporting an all-zero input word without saying so would look
-     * exactly like a machine with every switch open - Docs/PROTOCOL.md §11. */
+    /* M3 exists, so the input word is real - but only once the subsystem
+     * has actually been initialised. A build that links M3 without calling
+     * safety_input_init() still reports absent rather than reporting
+     * fifteen zeroes as if they were readings; an all-zero word that a host
+     * cannot distinguish from "no data" looks exactly like a machine with
+     * every switch open - Docs/PROTOCOL.md §6.2, §11.
+     * OUTPUTS_PRESENT stays clear until M9/M10 exist. */
+    if (safety_input_present()) {
+        flags     |= CNC_SFLAG_INPUTS_PRESENT;
+        out->inputs = safety_inputs();
+    }
     out->flags = flags;
 
     out->proto_faults       = s.proto_faults;

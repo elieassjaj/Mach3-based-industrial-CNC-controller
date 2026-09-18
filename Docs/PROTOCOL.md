@@ -408,7 +408,7 @@ host endpoint is known.
 | 12 | 4 | `last_seq_accepted` | |
 | 16 | 4 | `last_block_seq` | last accepted motion block |
 | 20 | 2 | `last_reject_reason` | §6.4 |
-| 22 | 2 | `inputs` | `PE0`…`PE14`, bit n = `PEn` |
+| 22 | 2 | `inputs` | bit n = `PEn`, **1 = asserted** (the pin reads LOW); bit 15 unused |
 | 24 | 2 | `outputs` | relay and output bits |
 | 26 | 2 | `spindle_pmille` | 0…1000 |
 | 28 | 4 | `segments_consumed` | |
@@ -435,12 +435,24 @@ Mirrors `stepgen_state_t` (ADR-010) — no new state model is introduced:
 | 2 | a host endpoint is known |
 | 3 | motion stream synced (`block_seq` baseline established) |
 | 4 | motion active (between first block and `END_OF_PROGRAM`/stop) |
-| 5 | inputs subsystem present — **0 until M3 exists**, see §11 |
+| 5 | inputs subsystem present — set once M3 has initialised, see §11 |
 | 6 | outputs subsystem present — **0 until M9/M10 exist**, see §11 |
 
 Bits 5 and 6 exist so the host can tell "no inputs are active" from "this
 firmware cannot report inputs yet". Reporting an all-zero bitfield without
 that distinction would look exactly like a machine with every switch open.
+
+That sentence also settles the encoding of `inputs`, which an earlier
+revision of this table left ambiguous: an all-zero word means **nothing
+asserted**, so bit *n* carries the *logical* state of `PE`*n*, not its
+electrical level. The inputs are active low (`Docs/PINOUT.md`), so a bit is
+set when the pin reads LOW. The firmware normalises this once, in M3, and
+the host applies Mach3's own per-signal `Negated` flags to the logical word
+— it never re-derives the board's polarity. See ADR-015, decision 3.
+
+Bit 5 tracks initialisation, not the build: a firmware that links M3 but
+has not called `safety_input_init()` reports absent rather than publishing
+fifteen zeroes as if they were readings.
 
 ### 6.3 `proto_faults` (latched, cleared only by `CLEAR_FAULT`)
 
@@ -599,8 +611,8 @@ for behaviour nobody has implemented would be guessing.
 |---|---|
 | Jog (`MyJogOn`/`MyJogOff`) | Can be expressed as ordinary motion blocks by the plugin; a dedicated opcode is only worth adding if that proves inadequate |
 | Dwell (`myDwell`) | Expressible as motion records with all axes zero. No opcode needed |
-| Homing | M3 (input manager) — there are no limit/home inputs to watch yet |
-| Probing | M3, plus a probe-input capture path |
+| Homing | M3 exists as of Phase 4, so the inputs are readable — what is still missing is the per-input *meaning* (which pin is X+ home), which ADR-010 and ADR-015 both place host-side, and a homing command encoding. Still v2 work |
+| Probing | M3 reports probe state at the status cadence (50 Hz), which is not a capture: a probe needs the position latched at the edge, in the ISR. That capture path does not exist |
 | Feed-rate override | Host-side: the plugin re-encodes the slices. No device opcode planned |
 | Position preset / `SETCOORDS` | Needs a decision on who owns machine coordinates. Real gap; add in v2 |
 | Firmware update over UDP | Out of scope for this project |
@@ -614,13 +626,17 @@ adding surface without adding capability.
 ## 11. What this firmware does not yet report
 
 Honest gaps in `STATUS`, all flagged in `flags` so a host cannot mistake
-them for real readings:
+them for real readings. Phase 4 closed the input rows; they are kept here,
+marked, rather than deleted, so a host written against an earlier revision
+can see what changed:
 
 | Field | State | Gate |
 |---|---|---|
-| `inputs` | always 0, `flags.5` = 0 | M3 — the `PE0`…`PE14` EXTI manager |
+| `inputs` | **reported since Phase 4**, `flags.5` = 1 once M3 has initialised | — |
 | `outputs`, `spindle_pmille` | always 0, `flags.6` = 0 | M9 / M10 |
-| E-stop input state | not reported | M3. The engine's own `EMERGENCY_STOP` state *is* reported in `state` |
+| E-stop input state | **reported since Phase 4** as bit 2 of `inputs`, debounced on release only. The engine's own `EMERGENCY_STOP` state is separately in `state` | — |
+| Probe capture (position latched at the probe edge) | not reported at all | A capture path in the input ISR; §10 |
+| Per-input meaning (which pin is a limit, a home, the probe) | never — deliberately host-side | ADR-010, ADR-015 decision 5 |
 
 ---
 

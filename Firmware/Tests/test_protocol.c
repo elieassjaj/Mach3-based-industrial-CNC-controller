@@ -22,6 +22,8 @@
 #include "cnc_session.h"
 #include "net_config.h"
 #include "stepgen.h"
+#include "safety_input.h"
+#include "safety_sim.h"
 #include "sim_trace.h"
 #include "test_util.h"
 
@@ -919,7 +921,70 @@ static void test_outputs_not_implemented(void)
     /* And the host is told the subsystem is absent, so an all-zero output
      * word cannot be mistaken for a real reading. */
     CHECK((st.flags & CNC_SFLAG_OUTPUTS_PRESENT) == 0);
+    /* M3 is linked into this binary but deliberately not initialised until
+     * the suite below, so the input subsystem correctly reports itself
+     * absent rather than publishing fifteen zeroes as readings. */
     CHECK((st.flags & CNC_SFLAG_INPUTS_PRESENT) == 0);
+    TDONE();
+}
+
+/* ------------------------------------------------------------------ */
+/* Inputs in STATUS (M3 x M14)                                         */
+/* ------------------------------------------------------------------ */
+
+/* Runs last: initialising M3 registers the E-STOP release interlock with
+ * the engine, and that registration is deliberately permanent. */
+static void test_inputs_in_status(void)
+{
+    cnc_status_t st;
+    size_t rl;
+
+    TCASE("once the input manager exists, STATUS says so");
+    sim_safety_reset();
+    engine_reset();
+    CHECK(safety_input_init());
+    rl = send_control(CNC_CTL_ENABLE_DRIVES, 10);
+    CHECK(reply_status(rl, &st));
+    CHECK((st.flags & CNC_SFLAG_INPUTS_PRESENT) != 0);
+    CHECK_EQI(st.inputs, 0);
+    TDONE();
+
+    TCASE("an asserted input reaches the host as a set bit");
+    sim_safety_assert(9);
+    for (uint32_t ms = 0; ms <= SAFETY_DEBOUNCE_MS + 1u; ms++) {
+        safety_input_poll(ms);
+    }
+    rl = send_control(CNC_CTL_STOP, 20);
+    CHECK(reply_status(rl, &st));
+    /* Active low at the pin, 1 = asserted on the wire - Docs/PROTOCOL.md
+     * §6, ADR-015. The host does not re-derive the board's polarity. */
+    CHECK_EQI(st.inputs, (1u << 9));
+    TDONE();
+
+    TCASE("the E-STOP input stops the machine and shows up in STATUS");
+    sim_safety_assert(SAFETY_ESTOP_INDEX);
+    safety_input_poll(30);
+    cnc_session_get_status(&st);
+    CHECK_EQI(st.state, STEPGEN_STATE_EMERGENCY_STOP);
+    CHECK_EQI((st.inputs & (uint16_t)SAFETY_ESTOP_MASK),
+              (uint16_t)SAFETY_ESTOP_MASK);
+    TDONE();
+
+    TCASE("CLEAR_ESTOP over the wire is refused while PE2 is still down");
+    rl = send_control(CNC_CTL_CLEAR_ESTOP, 40);
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.state, STEPGEN_STATE_EMERGENCY_STOP);
+    CHECK_EQI(st.last_reject_reason, CNC_REJECT_WRONG_STATE);
+    TDONE();
+
+    TCASE("and accepted once it has been released long enough");
+    sim_safety_release(SAFETY_ESTOP_INDEX);
+    for (uint32_t ms = 41; ms <= 41u + SAFETY_ESTOP_RELEASE_MS + 1u; ms++) {
+        safety_input_poll(ms);
+    }
+    rl = send_control(CNC_CTL_CLEAR_ESTOP, 200);
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.state, STEPGEN_STATE_SAFE_IDLE);
     TDONE();
 }
 
@@ -955,6 +1020,7 @@ int main(void)
     test_status_roundtrip();
     test_info();
     test_outputs_not_implemented();
+    test_inputs_in_status();
 
     printf("\n%d checks, %d failures\n", g_checks, g_fail);
     return g_fail ? 1 : 0;
