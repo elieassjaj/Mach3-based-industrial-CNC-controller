@@ -92,15 +92,25 @@ window is `[T, T+1]` ms. That is fine at 3 ms and would not be at 1 ms.
 
 ---
 
-## CubeIDE project settings still needed
+## CubeIDE project settings: already in `.cproject`
 
-The `.ioc` does not carry source folders or include paths, so alongside the
-motion and network entries add:
+Nothing to do. The project's own folders are registered in **both** the
+Debug and Release configurations:
 
-- `Safety/Inc` to the include paths, and `Safety/Src` to the source
-  locations. `Platform/STM32F407/Inc` and `Src` are already there.
+| Setting | Value |
+|---|---|
+| Include paths | `../Motion/Inc`, `../Net/Inc`, `../Safety/Inc`, `../Platform/STM32F407/Inc` |
+| Source folders | `Motion`, `Net`, `Safety`, `Platform/STM32F407` |
 
-The `.ioc` itself needs no change: `PE0`–`PE14` are already configured as
+`Platform/Host` is deliberately **not** a source folder: it holds the
+simulation ports, and compiling them for the target would collide with the
+STM32 ports symbol for symbol.
+
+The `.ioc` carries none of this — CubeMX does not manage source folders —
+so a CubeMX regeneration cannot remove it either. What it can do is rewrite
+`Core/`; see below.
+
+The `.ioc` itself needs no change either: `PE0`–`PE14` are already configured as
 `GPIO_MODE_IT_RISING_FALLING` with `GPIO_NOPULL`, and the NVIC entries
 already carry ADR-004's priorities. The port re-applies all of it at boot
 anyway, so a pin dropped by a future regeneration fails HV-41 rather than

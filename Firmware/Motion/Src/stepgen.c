@@ -19,6 +19,20 @@
  * That is the structural half of the Ethernet-isolation requirement; the
  * NVIC priority table in stepgen_hw_map.h is the other half.
  * ---------------------------------------------------------------------- */
+/* On the target the section name is a property of THIS project - both
+ * STM32CubeIDE build configurations link STM32F407VGTX_FLASH.ld, which
+ * defines .stepgen_ram - so it defaults here rather than depending on
+ * somebody remembering to add a -D in the IDE's project properties.
+ * Forgetting it does not fail the build: the ring silently falls back into
+ * SRAM1 next to the Ethernet buffers and the ADR-012 bus isolation
+ * disappears, which only HV-03 would catch, and only at runtime.
+ *
+ * A command-line -D still wins (the Makefile passes one), and a host build
+ * defines nothing, so the unit tests place the ring normally. */
+#if !defined(STEPGEN_BUFFERS_SECTION) && defined(STM32F407xx)
+#  define STEPGEN_BUFFERS_SECTION ".stepgen_ram"
+#endif
+
 #if defined(STEPGEN_BUFFERS_SECTION)
 #  define STEPGEN_BUF_ATTR __attribute__((section(STEPGEN_BUFFERS_SECTION), aligned(32)))
 #else

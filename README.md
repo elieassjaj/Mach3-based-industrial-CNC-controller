@@ -229,7 +229,7 @@ Mach3-based-industrial-CNC-controller/
 | 3 | UDP + motion protocol, M13/M14 (`Net/`, `Tools/c5p1.py`) | Implemented, 316 host checks. **No datagram has crossed real Ethernet** — see [`Docs/PHASE3-STATUS.md`](Docs/PHASE3-STATUS.md) |
 | 4 | Digital inputs + E-STOP, M3/M11 (`Safety/`, `Platform/STM32F407/`) | Implemented, 151 host checks. `STATUS.inputs` is live and ADR-010's E-STOP release interlock is enforced. **No button has been pressed on a board** — see [`Docs/PHASE4-STATUS.md`](Docs/PHASE4-STATUS.md) |
 
-No phase may be reported as compliant with any requirement it has not measured on the board; all four are gated on the prototype PCB. `Firmware/MOTION-README.md`, `Firmware/NET-README.md` and `Firmware/SAFETY-README.md` cover building and the CubeIDE project settings each subsystem needs.
+No phase may be reported as compliant with any requirement it has not measured on the board; all four are gated on the prototype PCB. `Firmware/MOTION-README.md`, `Firmware/NET-README.md` and `Firmware/SAFETY-README.md` cover building each subsystem. **Importing `Firmware/` into STM32CubeIDE needs no manual project setup**: `.cproject` carries the include paths and source folders for all four subsystems, in both the Debug and Release configurations.
 
 Still unwritten: the Mach3 host plugin and the output/spindle modules (M9/M10). The protocol they need is specified and implemented — [`Docs/PROTOCOL.md`](Docs/PROTOCOL.md) — and `Tools/c5p1.py` drives the controller from a PC without Mach3.
 

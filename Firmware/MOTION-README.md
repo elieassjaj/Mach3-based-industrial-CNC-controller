@@ -122,16 +122,43 @@ checks.
 
 ---
 
-## CubeIDE project settings still needed
+## CubeIDE project settings: already in `.cproject`
 
-The `.ioc` does not carry source folders or compiler flags, so set these
-once in the project properties:
+Nothing to do. The project's own folders are registered in **both** the
+Debug and Release configurations:
 
-- Add `Motion/Inc` and `Platform/STM32F407/Inc` to the include paths, and
-  `Motion/Src` + `Platform/STM32F407/Src` to the source locations.
-- Add the symbol `STEPGEN_BUFFERS_SECTION="\".stepgen_ram\""`. Without it
-  the ring falls back into SRAM1 and the Ethernet bus isolation quietly
-  disappears — test HV-03 catches that at runtime.
+| Setting | Value |
+|---|---|
+| Include paths | `../Motion/Inc`, `../Net/Inc`, `../Safety/Inc`, `../Platform/STM32F407/Inc` |
+| Source folders | `Motion`, `Net`, `Safety`, `Platform/STM32F407` |
+
+`Platform/Host` is deliberately **not** a source folder: it holds the
+simulation ports, and compiling them for the target would collide with the
+STM32 ports symbol for symbol.
+
+The `.ioc` carries none of this — CubeMX does not manage source folders —
+so a CubeMX regeneration cannot remove it either. What it can do is rewrite
+`Core/`; see below.
+
+`STEPGEN_BUFFERS_SECTION` no longer has to be set by hand either. It
+defaults to `.stepgen_ram` in `stepgen.c` whenever `STM32F407xx` is
+defined, because both build configurations link
+`STM32F407VGTX_FLASH.ld`, which is the file that defines that section — so
+the section name is a fact about this project, not a build-time choice.
+
+That default exists because forgetting the symbol did **not** fail the
+build: the ring fell back into SRAM1 next to the Ethernet buffers, the
+ADR-012 bus isolation quietly disappeared, and only HV-03 would have caught
+it, at runtime, on hardware. A `-D` on the command line still overrides it
+(the `Makefile` passes one), and a host build defines nothing, so the unit
+tests place the ring normally.
+
+Confirm it landed correctly after any build:
+
+```sh
+arm-none-eabi-nm -S CNC5AX-ETH.elf | grep g_step_buf
+# 2001c000 00001000 b g_step_buf     <- SRAM2 base, correct
+```
 
 ---
 

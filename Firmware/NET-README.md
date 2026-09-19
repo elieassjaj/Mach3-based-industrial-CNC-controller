@@ -32,7 +32,7 @@ bring-up procedure.
 ## Building
 
 ```sh
-make test       host verification - motion (1150) + network (130) + protocol (302)
+make test       motion (1150) + inputs (151) + network (130) + protocol (316)
 make test-net   the link-observer suite alone
 make test-proto the protocol suite alone
 make arm        cross-compile both subsystems for Cortex-M4F
@@ -47,16 +47,23 @@ requires.
 
 ---
 
-## CubeIDE project settings still needed
+## CubeIDE project settings: already in `.cproject`
 
-The `.ioc` does not carry source folders or include paths, so alongside the
-Phase 1 entries (`Motion/Inc`, `Platform/STM32F407/Inc`, `Motion/Src`,
-`Platform/STM32F407/Src`) add:
+Nothing to do. The project's own folders are registered in **both** the
+Debug and Release configurations:
 
-- `Net/Inc` to the include paths, and `Net/Src` to the source locations.
+| Setting | Value |
+|---|---|
+| Include paths | `../Motion/Inc`, `../Net/Inc`, `../Safety/Inc`, `../Platform/STM32F407/Inc` |
+| Source folders | `Motion`, `Net`, `Safety`, `Platform/STM32F407` |
 
-`Platform/STM32F407/Src` is already a source location from Phase 1, so the
-new `net_*.c` files there are picked up automatically.
+`Platform/Host` is deliberately **not** a source folder: it holds the
+simulation ports, and compiling them for the target would collide with the
+STM32 ports symbol for symbol.
+
+The `.ioc` carries none of this — CubeMX does not manage source folders —
+so a CubeMX regeneration cannot remove it either. What it can do is rewrite
+`Core/`; see below.
 
 ---
 
