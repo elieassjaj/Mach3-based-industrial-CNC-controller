@@ -28,8 +28,8 @@ Module boundaries below follow the logical decomposition already fixed in `Docs/
 | M6 | `Motion/Axis` | Per-axis state: position, direction, enable, target/commanded values | MOTION-ENGINE §23 (representation `[TBD]`) |
 | M7 | `Motion/DIR` | Generate `PD8`–`PD12` (X–B) direction changes with ≥200 ns setup/hold around the relevant STEP edge, active-high | PINOUT.md; MOTION-ENGINE §6–7, §24 (method `[TBD]`) |
 | M8 | `Motion/Planner` | Consume trajectory/command input, maintain the motion buffer, feed M5/M7 | MOTION-ENGINE §13, §16 (buffering strategy `[TBD]`); MACH3-INTERFACE.md §3–4 (shape of the input once the protocol exists) |
-| M9 | `IO/Outputs` | Relay (`PB8`) and status LEDs (`PB2` run, `PB1` error) | PINOUT.md (relay polarity **not yet documented** — see §4) |
-| M10 | `IO/Spindle` | Spindle PWM duty control over the already-configured `TIM3_CH1`/`PB4`, 10 kHz | PINOUT.md, ADR (TIM3 PSC 83/ARR 99 confirmed in `.ioc`) |
+| M9 | `IO/Outputs` | Relay (`PB8`) and status LEDs (`PB2` run, `PB1` error) | **Implemented (Phase 5)** — `IO/Src/io_outputs.c` + `Platform/STM32F407/Src/io_port_stm32f4.c`; decisions in ADR-016. Relay polarity resolved (ACTIVE HIGH, §4.6) |
+| M10 | `IO/Spindle` | Spindle PWM duty control over `TIM3_CH1`/`PB4`, 10 kHz | **Implemented (Phase 5)** — `IO/Src/io_spindle.c`; ADR-016 keeps the 10 kHz and refines the period to `PSC=0`/`ARR=8399` for 8400 duty steps instead of the `.ioc`'s 100 |
 | M11 | `IO/DigitalInput` | Expose the non-E-STOP `PE0/1/3–14` states in a form the protocol layer / Mach3 signal table can consume | **Implemented (Phase 4), folded into M3** — one `GPIOE` read is a complete sample of all 15, so a second module would have been a second copy of the same word. `safety_inputs()` feeds `STATUS.inputs` (ADR-015 decision 3) |
 | M12 | `Communication/Ethernet` | Own PHY/link bring-up (LAN8742-compatible driver already wired), static IP (`192.168.5.10/24`, confirmed), `MX_LWIP_Process()` pump (already called from `main()`) | Docs/ETHERNET.md §2.2, §15–16 |
 | M13 | `Communication/UDP` | Open/bind the motion UDP socket, send/receive datagrams | **Implemented (Phase 3)** — `Platform/STM32F407/Src/net_udp_stm32f4.c`, UDP 55010 (ADR-014) |
@@ -44,7 +44,9 @@ Module boundaries below follow the logical decomposition already fixed in `Docs/
 
 > **Phase 3 closed this section's central dependency.** The protocol is specified in `Docs/PROTOCOL.md` and implemented: port number, packet format, motion encoding, feedback format, backpressure mechanism and comm-timeout threshold are all decided (ADR-014). M13 and M14 are built and host-tested.
 >
-> **Phase 4 closed the input half.** M3 and M11 are built and host-tested (ADR-015). `STATUS.inputs` carries real readings, `flags.5` says so, and ADR-010's "never clear an E-stop while the input is still down" is now enforced rather than merely documented. What remains open is M9/M10 for outputs and the PC-side plugin.
+> **Phase 4 closed the input half.** M3 and M11 are built and host-tested (ADR-015). `STATUS.inputs` carries real readings, `flags.5` says so, and ADR-010's "never clear an E-stop while the input is still down" is now enforced rather than merely documented.
+>
+> **Phase 5 closed the output half.** M9 and M10 are built and host-tested (ADR-016). `OUTPUTS` is acted on instead of refused, `flags.6` is set, the relay and spindle drop from the E-STOP interrupt rather than at the next poll, and the status LEDs report the ADR-010 state model. **Every firmware module in this table now exists.** What remains is the PC-side Mach3 plugin.
 
 Everything else in this plan can be implemented and bench-tested without Mach3 or a PC. These cannot:
 
@@ -92,9 +94,9 @@ Implement the state machine and fault aggregation with the states frozen in §4.
 EXTI wiring at register level; `PE2` reaches the motion engine directly and independently of everything else; the other 14 inputs capture state only (their Mach3-facing meaning is host-side, ADR-010/ADR-015 decision 5). Built after the motion, Ethernet and protocol phases rather than before them, because those three carried the project's technical risk and this one did not — but note what that ordering cost: every phase before this one ran with an E-STOP that existed on paper only.
 *Verify:* toggle each input by hand; measure E-STOP response latency with a logic analyzer — this must hold regardless of what the motion phase is doing on the STEP outputs, which is the point of ADR-004's priority scheme (EXTI2 above the DMA refill interrupt). That is HV-18, and it has **not** been run — `Docs/HARDWARE-VALIDATION.md` §5d.
 
-**Phase 2 — Output Management (M9 complete, M10)**
-Relay and spindle PWM duty control. Needs §4.6 (relay polarity) resolved first.
-*Verify:* scope the spindle PWM output, confirm 10 kHz and duty response; confirm relay switches with the correct sense.
+**Phase 2 — Output Management (M9 complete, M10)** — **done, out of order (built as Phase 5)**
+Relay and spindle PWM duty control, plus the status LEDs and the interlock that governs all of them (ADR-016). §4.6 (relay polarity) was resolved before this was written.
+*Verify:* scope the spindle PWM output, confirm 10 kHz and duty response across the range — including that 100 % is a constant high with no notch; confirm the relay switches with the correct sense, that it will not switch before the machine is armed, and that it drops on the E-STOP edge. That is HV-50..HV-55, and **none of it has been run** — `Docs/HARDWARE-VALIDATION.md` §5e.
 
 **Phase 3 — Motion Engine (M4, M5, M6, M7)** — the project's central technical risk, and independent of the protocol
 Needs §4.1, §4.2, §4.4 frozen first. Build incrementally:

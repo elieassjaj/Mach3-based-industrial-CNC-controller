@@ -47,6 +47,7 @@
 									<listOptionValue builtIn="false" value="../Motion/Inc"/>
 									<listOptionValue builtIn="false" value="../Net/Inc"/>
 									<listOptionValue builtIn="false" value="../Safety/Inc"/>
+									<listOptionValue builtIn="false" value="../IO/Inc"/>
 									<listOptionValue builtIn="false" value="../Platform/STM32F407/Inc"/>
 									<listOptionValue builtIn="false" value="../Drivers/STM32F4xx_HAL_Driver/Inc"/>
 									<listOptionValue builtIn="false" value="../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy"/>
@@ -102,6 +103,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Motion"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Net"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Safety"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="IO"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Platform/STM32F407"/>
 					</sourceEntries>
 				</configuration>
@@ -150,6 +152,7 @@
 									<listOptionValue builtIn="false" value="../Motion/Inc"/>
 									<listOptionValue builtIn="false" value="../Net/Inc"/>
 									<listOptionValue builtIn="false" value="../Safety/Inc"/>
+									<listOptionValue builtIn="false" value="../IO/Inc"/>
 									<listOptionValue builtIn="false" value="../Platform/STM32F407/Inc"/>
 									<listOptionValue builtIn="false" value="../Drivers/STM32F4xx_HAL_Driver/Inc"/>
 									<listOptionValue builtIn="false" value="../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy"/>
@@ -205,6 +208,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Motion"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Net"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Safety"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="IO"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Platform/STM32F407"/>
 					</sourceEntries>
 				</configuration>

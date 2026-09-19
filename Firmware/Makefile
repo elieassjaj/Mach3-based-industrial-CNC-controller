@@ -21,6 +21,10 @@ NET_SRC    := Net/Src/net_link.c \
 SAFETY_INC := -ISafety/Inc
 SAFETY_SRC := Safety/Src/safety_input.c
 
+IO_INC     := -IIO/Inc
+IO_SRC     := IO/Src/io_outputs.c \
+              IO/Src/io_spindle.c
+
 WARN := -Wall -Wextra -Werror -Wshadow -Wconversion -Wsign-conversion \
         -Wpointer-arith -Wstrict-prototypes -Wmissing-prototypes \
         -Wundef -Wdouble-promotion
@@ -40,7 +44,13 @@ HOST_FLAGS := -std=c11 -O2 -g $(WARN) $(HOST_INC)
 # ended up in EMERGENCY_STOP, not that a mock recorded a call.
 SAFETY_HOST_SRC := $(SAFETY_SRC) Platform/Host/Src/safety_port_sim.c
 
-.PHONY: all test test-motion test-net test-proto test-safety bench arm clean
+# The output subsystem reaches BOTH the motion engine (for the state its
+# interlock keys off) and the safety subsystem (to register the E-STOP
+# kill), so anything linking it links those too. That is the point: a test
+# asserting PE2 can then check that the relay really dropped.
+IO_HOST_SRC := $(IO_SRC) Platform/Host/Src/io_port_sim.c
+
+.PHONY: all test test-motion test-net test-proto test-safety test-io bench arm clean
 
 all: test bench arm
 
@@ -61,20 +71,27 @@ $(BUILD)/test_net_link: Net/Src/net_link.c Tests/test_net_link.c | $(BUILD)
 # real queue rather than a mock. It links the safety core too, since the
 # status packet now carries the input word.
 $(BUILD)/test_protocol: $(NET_SRC) $(HOST_SRC) $(SAFETY_HOST_SRC) \
-                        Tests/test_protocol.c | $(BUILD)
-	$(HOST_CC) $(HOST_FLAGS) $(NET_INC) $(SAFETY_INC) $^ -o $@
+                        $(IO_HOST_SRC) Tests/test_protocol.c | $(BUILD)
+	$(HOST_CC) $(HOST_FLAGS) $(NET_INC) $(SAFETY_INC) $(IO_INC) $^ -o $@
 
-$(BUILD)/test_safety: $(SAFETY_HOST_SRC) $(HOST_SRC) Tests/test_safety.c \
-                      | $(BUILD)
-	$(HOST_CC) $(HOST_FLAGS) $(SAFETY_INC) $^ -o $@
+$(BUILD)/test_safety: $(SAFETY_HOST_SRC) $(HOST_SRC) $(IO_HOST_SRC) \
+                      Tests/test_safety.c | $(BUILD)
+	$(HOST_CC) $(HOST_FLAGS) $(SAFETY_INC) $(IO_INC) $^ -o $@
 
-test: test-motion test-safety test-net test-proto
+$(BUILD)/test_io: $(IO_HOST_SRC) $(SAFETY_HOST_SRC) $(HOST_SRC) \
+                  Tests/test_io.c | $(BUILD)
+	$(HOST_CC) $(HOST_FLAGS) $(SAFETY_INC) $(IO_INC) $^ -o $@
+
+test: test-motion test-safety test-io test-net test-proto
 
 test-motion: $(BUILD)/test_stepgen
 	@./$(BUILD)/test_stepgen
 
 test-safety: $(BUILD)/test_safety
 	@./$(BUILD)/test_safety
+
+test-io: $(BUILD)/test_io
+	@./$(BUILD)/test_io
 
 test-net: $(BUILD)/test_net_link
 	@./$(BUILD)/test_net_link
@@ -90,7 +107,7 @@ ARM_CC    := arm-none-eabi-gcc
 # The CubeIDE project's own CMSIS copy; tools/fetch_cmsis.sh provides a
 # standalone one for CI or a bare checkout.
 CMSIS_DIR ?= Drivers/CMSIS
-ARM_INC   := $(MOTION_INC) $(NET_INC) $(SAFETY_INC) -IPlatform/STM32F407/Inc \
+ARM_INC   := $(MOTION_INC) $(NET_INC) $(SAFETY_INC) $(IO_INC) -IPlatform/STM32F407/Inc \
              -I$(CMSIS_DIR)/Device/ST/STM32F4xx/Include \
              -I$(CMSIS_DIR)/Include
 # The network port also needs the HAL, the PHY driver and lwIP, since it
@@ -110,7 +127,10 @@ ARM_SRC   := $(MOTION_SRC) \
              Platform/STM32F407/Src/net_udp_stm32f4.c \
              $(SAFETY_SRC) \
              Platform/STM32F407/Src/safety_port_stm32f4.c \
-             Platform/STM32F407/Src/safety_selftest_stm32f4.c
+             Platform/STM32F407/Src/safety_selftest_stm32f4.c \
+             $(IO_SRC) \
+             Platform/STM32F407/Src/io_port_stm32f4.c \
+             Platform/STM32F407/Src/io_selftest_stm32f4.c
 ARM_FLAGS := -std=c11 -O2 -g -mcpu=cortex-m4 -mthumb \
              -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
              -ffunction-sections -fdata-sections \
@@ -143,7 +163,7 @@ clean:
 # so the section sizes below will not match the IDE's byte for byte. What
 # this target establishes is that the code compiles, links, fits, and places
 # its buffers in the regions ADR-012 requires.
-FW_INC := -ICore/Inc -IMotion/Inc $(NET_INC) $(SAFETY_INC) -IPlatform/STM32F407/Inc \
+FW_INC := -ICore/Inc -IMotion/Inc $(NET_INC) $(SAFETY_INC) $(IO_INC) -IPlatform/STM32F407/Inc \
           -IDrivers/STM32F4xx_HAL_Driver/Inc \
           -IDrivers/STM32F4xx_HAL_Driver/Inc/Legacy \
           -IDrivers/BSP/Components/lan8742 \
@@ -173,7 +193,10 @@ FW_SRC_OURS   := $(MOTION_SRC) $(NET_SRC) \
                  Platform/STM32F407/Src/net_udp_stm32f4.c \
                  $(SAFETY_SRC) \
                  Platform/STM32F407/Src/safety_port_stm32f4.c \
-                 Platform/STM32F407/Src/safety_selftest_stm32f4.c
+                 Platform/STM32F407/Src/safety_selftest_stm32f4.c \
+                 $(IO_SRC) \
+                 Platform/STM32F407/Src/io_port_stm32f4.c \
+                 Platform/STM32F407/Src/io_selftest_stm32f4.c
 
 FW_SRC_VENDOR := $(wildcard Core/Src/*.c) \
                  $(wildcard Drivers/STM32F4xx_HAL_Driver/Src/*.c) \

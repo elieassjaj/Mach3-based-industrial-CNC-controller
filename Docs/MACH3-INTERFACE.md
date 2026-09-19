@@ -206,6 +206,24 @@ is most likely to get wrong:
    (`Docs/PROTOCOL.md` §10, §11). A plugin must not synthesise a probe hit
    from two status packets.
 
+`[DESIGN-IMPLICATION]` **Phase 5 adds `SetOutputs()` and the spindle.**
+`OUTPUTS` is now acted on rather than refused, and three things follow:
+
+4. **An accepted `OUTPUTS` is not a switched relay.** The firmware holds
+   every output off unless the machine is in `READY` or `RUNNING`, and
+   drops them on any fault. `STATUS.outputs` and `STATUS.spindle_pmille`
+   report what the pins are doing, so the plugin should drive Mach3's
+   output LEDs from those and never from what it sent.
+5. **`spindle_pmille` is `MainPlanner->Spindle.ratio × 1000`, and nothing
+   else.** No RPM crosses the wire. The plugin keeps the RPM↔ratio map,
+   exactly as `ncPod` does, because only it knows what spindle is fitted.
+   Out of range is refused, not clamped. Note that `ncPod` never sends a
+   zero duty while the spindle is on; that policy stays host-side, and this
+   device reads zero as zero.
+6. **An emergency stop discards pending output requests.** After a clear,
+   the plugin must re-send the relay and duty it wants. Nothing comes back
+   by itself.
+
 Two firmware-side facts worth knowing host-side:
 
 - The E-STOP input is reported (bit 2) **and** independently visible as the
@@ -215,3 +233,7 @@ Two firmware-side facts worth knowing host-side:
 - `CONTROL:CLEAR_ESTOP` is refused while `PE2` still reads asserted, and
   for a further release-stabilisation window after that. A plugin should
   expect `WRONG_STATE` and retry, not treat the first refusal as an error.
+- **Spindle direction has no pin.** `Docs/PINOUT.md` gives one relay and
+  nothing in this repository says it means CW/CCW rather than on/off. A
+  plugin that needs `M4` must treat that as a hardware question, not a
+  protocol one (`Docs/PROTOCOL.md` §10).

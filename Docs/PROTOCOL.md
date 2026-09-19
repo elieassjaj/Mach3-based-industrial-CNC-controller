@@ -409,8 +409,8 @@ host endpoint is known.
 | 16 | 4 | `last_block_seq` | last accepted motion block |
 | 20 | 2 | `last_reject_reason` | §6.4 |
 | 22 | 2 | `inputs` | bit n = `PEn`, **1 = asserted** (the pin reads LOW); bit 15 unused |
-| 24 | 2 | `outputs` | relay and output bits |
-| 26 | 2 | `spindle_pmille` | 0…1000 |
+| 24 | 2 | `outputs` | relay and output bits — **what the pins are doing**, not what was requested |
+| 26 | 2 | `spindle_pmille` | 0…1000 — likewise the duty actually generated |
 | 28 | 4 | `segments_consumed` | |
 | 32 | 4 | `underruns` | STEP ring refill misses |
 | 36 | 4 | `starved_ticks` | |
@@ -436,7 +436,7 @@ Mirrors `stepgen_state_t` (ADR-010) — no new state model is introduced:
 | 3 | motion stream synced (`block_seq` baseline established) |
 | 4 | motion active (between first block and `END_OF_PROGRAM`/stop) |
 | 5 | inputs subsystem present — set once M3 has initialised, see §11 |
-| 6 | outputs subsystem present — **0 until M9/M10 exist**, see §11 |
+| 6 | outputs subsystem present — set once M9/M10 have initialised, see §11 |
 
 Bits 5 and 6 exist so the host can tell "no inputs are active" from "this
 firmware cannot report inputs yet". Reporting an all-zero bitfield without
@@ -450,9 +450,9 @@ set when the pin reads LOW. The firmware normalises this once, in M3, and
 the host applies Mach3's own per-signal `Negated` flags to the logical word
 — it never re-derives the board's polarity. See ADR-015, decision 3.
 
-Bit 5 tracks initialisation, not the build: a firmware that links M3 but
-has not called `safety_input_init()` reports absent rather than publishing
-fifteen zeroes as if they were readings.
+Both bits track initialisation, not the build: a firmware that links M3 or
+M9/M10 but has not called `safety_input_init()` / `io_init()` reports
+absent rather than publishing zeroes as if they were readings.
 
 ### 6.3 `proto_faults` (latched, cleared only by `CLEAR_FAULT`)
 
@@ -592,12 +592,53 @@ The mask/value pair is `ncPod`'s `USBOUTPUT` convention `[SDK-EVIDENCE]` —
 the corresponding bit is 1 in axisX" — and it exists so a host can change
 one output without knowing the state of the others.
 
-**Phase 3 firmware rejects this opcode with `NOT_IMPLEMENTED`.** The
-modules that own those pins — M9 (outputs) and M10 (spindle PWM) — do not
-exist yet. The wire format is fixed here so the plugin can be written
-against a stable interface; the behaviour behind it is Phase 5 work. Status
-bit `flags.6` reports that absence explicitly rather than returning
+**Implemented as of Phase 5** (M9, M10 — ADR-016). `NOT_IMPLEMENTED` is
+still the answer from a build in which `io_init()` has not run, and
+`flags.6` reports that case explicitly rather than returning
 plausible-looking zeros.
+
+### 9.1 What an accepted `OUTPUTS` actually promises
+
+Acceptance means the request was **taken**, not that a pin moved. The
+firmware holds every output off unless the machine is in `READY` or
+`RUNNING`, and drops them on any fault or emergency stop — including the
+`COMM_TIMEOUT` and underflow faults that ADR-010 lets hold position with
+the drives still energised, because that exemption is about holding force
+and a spinning tool is not holding force (ADR-016, decision 2).
+
+So `STATUS.outputs` and `STATUS.spindle_pmille` report what the pins are
+**actually doing**. When they disagree with what was sent, the interlock is
+holding the output off and the machine state in the same packet says why.
+A host must not assume its request took effect.
+
+An emergency stop also **discards** pending requests rather than
+withholding them: clearing the stop never re-energises a relay or restarts
+a spindle on its own. The host must ask again.
+
+### 9.2 Rejection cases
+
+| Reject | Cause |
+|---|---|
+| `NOT_IMPLEMENTED` | the output subsystem is absent from this build |
+| `BAD_PARAM` | malformed payload; an `out_mask` bit this firmware does not implement; `spindle_pmille` above 1000 |
+
+Out-of-range duty is **refused, never clamped** — a host asking for 150 %
+has a bug, and quietly giving it 100 % hides that bug behind a spinning
+tool. Nothing is applied partially: a packet that sets the relay *and* an
+out-of-range duty changes neither, because a host that got half of what it
+asked for cannot tell which half.
+
+### 9.3 Duty scaling
+
+`spindle_pmille` is a direct quantisation of the SDK's own
+`MainPlanner->Spindle.ratio` (0…1) `[SDK-CONFIRMED]`,
+`SDK/ncPod/MachDevImplementation.cpp`. **RPM never reaches the device.**
+The host owns the RPM↔ratio map (`SpindleFM::SetSpindleSpeed`) because it
+is the only side that knows what spindle is fitted.
+
+The device generates 10 kHz with 8400 counts per period, so every one of
+the 1000 per-mille steps resolves to a distinct duty. `0` means 0 % and
+stops the generator; `0xFFFF` means leave unchanged.
 
 ---
 
@@ -615,6 +656,7 @@ for behaviour nobody has implemented would be guessing.
 | Probing | M3 reports probe state at the status cadence (50 Hz), which is not a capture: a probe needs the position latched at the edge, in the ISR. That capture path does not exist |
 | Feed-rate override | Host-side: the plugin re-encodes the slices. No device opcode planned |
 | Position preset / `SETCOORDS` | Needs a decision on who owns machine coordinates. Real gap; add in v2 |
+| Spindle direction (M3/M4 in G-code, i.e. CW/CCW) | No pin is assigned to it. `Docs/PINOUT.md` has one relay, and nothing in this repository says it means direction rather than on/off. Needs a hardware decision first, not a wire-format one |
 | Firmware update over UDP | Out of scope for this project |
 
 Jog and dwell are marked "no opcode needed" rather than "TBD": both fall
@@ -628,12 +670,12 @@ adding surface without adding capability.
 Honest gaps in `STATUS`, all flagged in `flags` so a host cannot mistake
 them for real readings. Phase 4 closed the input rows; they are kept here,
 marked, rather than deleted, so a host written against an earlier revision
-can see what changed:
+can see what changed. Phase 5 closed the output rows the same way:
 
 | Field | State | Gate |
 |---|---|---|
 | `inputs` | **reported since Phase 4**, `flags.5` = 1 once M3 has initialised | — |
-| `outputs`, `spindle_pmille` | always 0, `flags.6` = 0 | M9 / M10 |
+| `outputs`, `spindle_pmille` | **reported since Phase 5**, `flags.6` = 1 once M9/M10 have initialised | — |
 | E-stop input state | **reported since Phase 4** as bit 2 of `inputs`, debounced on release only. The engine's own `EMERGENCY_STOP` state is separately in `state` | — |
 | Probe capture (position latched at the probe edge) | not reported at all | A capture path in the input ISR; §10 |
 | Per-input meaning (which pin is a limit, a home, the probe) | never — deliberately host-side | ADR-010, ADR-015 decision 5 |

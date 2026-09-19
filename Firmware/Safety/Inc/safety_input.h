@@ -52,6 +52,30 @@
 bool safety_input_init(void);
 
 /**
+ * Register a second action to run, in interrupt context, the instant an
+ * E-STOP assertion is seen - immediately after the motion engine has been
+ * stopped and before anything else.
+ *
+ * The motion engine is stopped unconditionally and is not optional. This
+ * hook is for everything else that must de-energise on the same edge
+ * rather than one superloop iteration later: the output subsystem (M9/M10)
+ * registers `io_emergency_off()` here, so a spindle contactor drops on the
+ * PE2 edge.
+ *
+ * One slot, deliberately. A list would invite an ordering question inside
+ * the most latency-critical interrupt in the system; a single registration
+ * from a single owner has no ordering to get wrong.
+ *
+ * Whatever is registered runs at NVIC priority 0 and must therefore be
+ * bounded, non-blocking and register-writes-only.
+ */
+typedef void (*safety_estop_action_t)(void);
+void safety_set_estop_action(safety_estop_action_t fn);
+
+/** True if an E-STOP action is registered. Used by the on-target self-test. */
+bool safety_has_estop_action(void);
+
+/**
  * Periodic work: the debounce filter, the E-STOP release timer and the
  * chatter counters. Call from the superloop as often as convenient; the
  * filter is expressed in milliseconds, so calling it faster only improves

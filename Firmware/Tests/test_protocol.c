@@ -24,6 +24,9 @@
 #include "stepgen.h"
 #include "safety_input.h"
 #include "safety_sim.h"
+#include "io_outputs.h"
+#include "io_spindle.h"
+#include "io_sim.h"
 #include "sim_trace.h"
 #include "test_util.h"
 
@@ -893,11 +896,13 @@ static void test_outputs_not_implemented(void)
 {
     cnc_status_t st;
 
-    TCASE("OUTPUTS is answered honestly rather than accepted silently");
+    TCASE("OUTPUTS is answered honestly when the subsystem is absent");
     engine_reset();
+    sim_io_reset();
 
-    /* The wire format is fixed so the plugin can be written, but M9/M10 do
-     * not exist. Accepting would tell the host a relay had switched. */
+    /* M9/M10 are linked into this binary but io_init() has not run, so the
+     * firmware cannot drive anything. Accepting would tell the host a
+     * relay had switched. */
     uint8_t *p = &tx[CNC_HDR_SIZE];
     const uint16_t plen = CNC_OUTPUTS_PAYLOAD_SIZE;
     tx[0] = 0x43; tx[1] = 0x35; tx[2] = 0x50; tx[3] = 0x31;
@@ -921,10 +926,133 @@ static void test_outputs_not_implemented(void)
     /* And the host is told the subsystem is absent, so an all-zero output
      * word cannot be mistaken for a real reading. */
     CHECK((st.flags & CNC_SFLAG_OUTPUTS_PRESENT) == 0);
-    /* M3 is linked into this binary but deliberately not initialised until
-     * the suite below, so the input subsystem correctly reports itself
-     * absent rather than publishing fifteen zeroes as readings. */
+    /* Same for M3, until the suite below initialises it. */
     CHECK((st.flags & CNC_SFLAG_INPUTS_PRESENT) == 0);
+    TDONE();
+}
+
+/* Build an OUTPUTS packet. Kept local because no encoder exists for it -
+ * the host side of this opcode is the plugin's job, not this firmware's. */
+static size_t send_outputs(uint16_t mask, uint16_t value, uint16_t pmille,
+                           uint32_t now_ms)
+{
+    const uint16_t plen = CNC_OUTPUTS_PAYLOAD_SIZE;
+    uint8_t *p = &tx[CNC_HDR_SIZE];
+
+    tx[0] = 0x43; tx[1] = 0x35; tx[2] = 0x50; tx[3] = 0x31;
+    tx[4] = CNC_PROTO_VERSION; tx[5] = CNC_OP_OUTPUTS;
+    tx[6] = (uint8_t)plen; tx[7] = 0;
+    ++host_seq;
+    tx[8]  = (uint8_t)(host_seq & 0xFF);
+    tx[9]  = (uint8_t)((host_seq >> 8) & 0xFF);
+    tx[10] = (uint8_t)((host_seq >> 16) & 0xFF);
+    tx[11] = (uint8_t)((host_seq >> 24) & 0xFF);
+
+    memset(p, 0, plen);
+    p[0] = (uint8_t)(mask & 0xFF);   p[1] = (uint8_t)(mask >> 8);
+    p[2] = (uint8_t)(value & 0xFF);  p[3] = (uint8_t)(value >> 8);
+    p[4] = (uint8_t)(pmille & 0xFF); p[5] = (uint8_t)(pmille >> 8);
+
+    const size_t crc_off = CNC_HDR_SIZE + plen;
+    const uint32_t c = cnc_crc32(tx, crc_off);
+    tx[crc_off]     = (uint8_t)(c & 0xFF);
+    tx[crc_off + 1] = (uint8_t)((c >> 8) & 0xFF);
+    tx[crc_off + 2] = (uint8_t)((c >> 16) & 0xFF);
+    tx[crc_off + 3] = (uint8_t)((c >> 24) & 0xFF);
+
+    return deliver(tx, CNC_OVERHEAD + plen, now_ms);
+}
+
+/* ------------------------------------------------------------------ */
+/* Outputs and spindle over the wire (M9/M10 x M14)                    */
+/* ------------------------------------------------------------------ */
+
+/* Runs last, with the input suite: io_init() registers a kill with the
+ * E-STOP path and that registration is deliberately permanent. */
+static void test_outputs_over_the_wire(void)
+{
+    cnc_status_t st;
+    size_t rl;
+
+    TCASE("once the output subsystem exists, STATUS says so");
+    sim_safety_reset();
+    sim_io_reset();
+    engine_reset();
+    CHECK(safety_input_init());
+    CHECK(io_init());
+    rl = send_control(CNC_CTL_ENABLE_DRIVES, 10);
+    CHECK(reply_status(rl, &st));
+    CHECK((st.flags & CNC_SFLAG_OUTPUTS_PRESENT) != 0);
+    CHECK_EQI(st.outputs, 0);
+    CHECK_EQI(st.spindle_pmille, 0);
+    TDONE();
+
+    TCASE("a relay and a duty sent together both take effect");
+    rl = send_outputs(CNC_OUT_BIT_RELAY, CNC_OUT_BIT_RELAY, 250u, 20);
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.last_reject_reason, CNC_REJECT_NONE);
+    io_poll(20);
+    cnc_session_get_status(&st);
+    CHECK_EQI(st.outputs, CNC_OUT_BIT_RELAY);
+    CHECK_EQI(st.spindle_pmille, 250);
+    CHECK(sim_io_relay());
+    TDONE();
+
+    TCASE("0xFFFF leaves the duty alone");
+    rl = send_outputs(CNC_OUT_BIT_RELAY, 0u, 0xFFFFu, 30);
+    CHECK(reply_status(rl, &st));
+    io_poll(30);
+    cnc_session_get_status(&st);
+    CHECK_EQI(st.outputs, 0);              /* relay went off  */
+    CHECK_EQI(st.spindle_pmille, 250);     /* duty unchanged  */
+    TDONE();
+
+    TCASE("an out-of-range duty is refused and changes nothing");
+    rl = send_outputs(CNC_OUT_BIT_RELAY, CNC_OUT_BIT_RELAY, 1001u, 40);
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.last_reject_reason, CNC_REJECT_BAD_PARAM);
+    io_poll(40);
+    cnc_session_get_status(&st);
+    /* The relay in the same packet did not switch either: a request that
+     * is half understood is refused whole. */
+    CHECK_EQI(st.outputs, 0);
+    CHECK_EQI(st.spindle_pmille, 250);
+    TDONE();
+
+    TCASE("a reserved output bit is refused");
+    rl = send_outputs(0x0002u, 0x0002u, 0xFFFFu, 50);
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.last_reject_reason, CNC_REJECT_BAD_PARAM);
+    TDONE();
+
+    TCASE("STATUS reports what the pins do, not what the host asked for");
+    /* The single most useful thing this packet can say to an operator
+     * wondering why the relay did not click. */
+    rl = send_outputs(CNC_OUT_BIT_RELAY, CNC_OUT_BIT_RELAY, 500u, 60);
+    CHECK(reply_status(rl, &st));
+    io_poll(60);
+    cnc_session_get_status(&st);
+    CHECK_EQI(st.outputs, CNC_OUT_BIT_RELAY);
+
+    sim_safety_assert(SAFETY_ESTOP_INDEX);      /* interrupt-time kill */
+    io_poll(61);
+    cnc_session_get_status(&st);
+    CHECK_EQI(st.state, STEPGEN_STATE_EMERGENCY_STOP);
+    CHECK_EQI(st.outputs, 0);
+    CHECK_EQI(st.spindle_pmille, 0);
+    CHECK(!sim_io_relay());
+    TDONE();
+
+    TCASE("an output request during an emergency stop is not obeyed");
+    rl = send_outputs(CNC_OUT_BIT_RELAY, CNC_OUT_BIT_RELAY, 900u, 70);
+    CHECK(reply_status(rl, &st));
+    /* Accepted at the protocol layer - it is a well-formed request - and
+     * held by the interlock, which STATUS reports. */
+    io_poll(70);
+    cnc_session_get_status(&st);
+    CHECK_EQI(st.outputs, 0);
+    CHECK_EQI(st.spindle_pmille, 0);
+    CHECK(!sim_io_relay());
     TDONE();
 }
 
@@ -1021,6 +1149,7 @@ int main(void)
     test_info();
     test_outputs_not_implemented();
     test_inputs_in_status();
+    test_outputs_over_the_wire();
 
     printf("\n%d checks, %d failures\n", g_checks, g_fail);
     return g_fail ? 1 : 0;

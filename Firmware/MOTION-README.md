@@ -19,8 +19,8 @@ protocol layers independent of the motion engine.
 See `../Docs/PHASE1-STATUS.md` for results, assumptions and blockers, and
 `../Docs/HARDWARE-VALIDATION.md` for the bring-up procedure. The E-STOP
 input that drives `stepgen_emergency_stop()` is Phase 4's — see
-`NET-README.md` for the network layer and `SAFETY-README.md` for the
-inputs.
+`NET-README.md` for the network layer, `SAFETY-README.md` for the inputs
+and `IO-README.md` for the relay, LEDs and spindle.
 
 ---
 
@@ -129,8 +129,8 @@ Debug and Release configurations:
 
 | Setting | Value |
 |---|---|
-| Include paths | `../Motion/Inc`, `../Net/Inc`, `../Safety/Inc`, `../Platform/STM32F407/Inc` |
-| Source folders | `Motion`, `Net`, `Safety`, `Platform/STM32F407` |
+| Include paths | `../Motion/Inc`, `../Net/Inc`, `../Safety/Inc`, `../IO/Inc`, `../Platform/STM32F407/Inc` |
+| Source folders | `Motion`, `Net`, `Safety`, `IO`, `Platform/STM32F407` |
 
 `Platform/Host` is deliberately **not** a source folder: it holds the
 simulation ports, and compiling them for the target would collide with the

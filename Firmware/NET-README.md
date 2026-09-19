@@ -32,7 +32,8 @@ bring-up procedure.
 ## Building
 
 ```sh
-make test       motion (1150) + inputs (151) + network (130) + protocol (316)
+make test       motion (1150) + inputs (151) + outputs (1160)
+                + network (130) + protocol (347)
 make test-net   the link-observer suite alone
 make test-proto the protocol suite alone
 make arm        cross-compile both subsystems for Cortex-M4F
@@ -54,8 +55,8 @@ Debug and Release configurations:
 
 | Setting | Value |
 |---|---|
-| Include paths | `../Motion/Inc`, `../Net/Inc`, `../Safety/Inc`, `../Platform/STM32F407/Inc` |
-| Source folders | `Motion`, `Net`, `Safety`, `Platform/STM32F407` |
+| Include paths | `../Motion/Inc`, `../Net/Inc`, `../Safety/Inc`, `../IO/Inc`, `../Platform/STM32F407/Inc` |
+| Source folders | `Motion`, `Net`, `Safety`, `IO`, `Platform/STM32F407` |
 
 `Platform/Host` is deliberately **not** a source folder: it holds the
 simulation ports, and compiling them for the target would collide with the

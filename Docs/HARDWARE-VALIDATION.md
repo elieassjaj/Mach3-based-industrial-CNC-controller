@@ -17,6 +17,7 @@ written into the table in §6, the corresponding claim **is not made**.
 | **HV-2x** | In firmware, on target | Ethernet/PHY configuration (Phase 2) |
 | **HV-3x** | Wire + scope | The C5P1 protocol end to end (Phase 3) |
 | **HV-4x** | In firmware, on target | Digital-input and E-STOP configuration (Phase 4) |
+| **HV-5x** | In firmware + meter/scope | Relay, LEDs and spindle PWM (Phase 5) |
 
 HV-0x is implemented in
 `Firmware/Platform/STM32F407/Src/stepgen_selftest_stm32f4.c`
@@ -581,6 +582,109 @@ them as validated.
 
 ---
 
+## 5e. Output tests (HV-5x) — Phase 5 / M9 + M10
+
+HV-50..HV-53 are run by `io_selftest_run_all()`
+(`Firmware/Platform/STM32F407/Src/io_selftest_stm32f4.c`) at boot when
+`CNC_RUN_SELFTEST_AT_BOOT` is set. Results are in `io_selftest_results()`.
+
+**None of them closes the relay or turns the spindle.** A boot-time test
+that span a tool to prove it could is a test nobody dares enable on a
+machine. HV-54 and HV-55 do exercise the outputs, on a bench, deliberately,
+with nothing dangerous wired to the relay.
+
+### HV-50 — Outputs are safe at boot
+
+*Method.* Read `PB8`'s output level, the relay's logical state, and whether
+the PWM generator is running.
+
+*Pass.* Relay de-energised, `PB8` at its inactive level, generator stopped
+(not merely at 0 % duty), `STATUS.outputs` zero.
+
+*Why it matters.* `Docs/PINOUT.md` requires `PB8` LOW at boot so the relay
+defaults off, and §32 requires nothing to energise before a known-safe
+state. This is that requirement, read back from the pin.
+
+### HV-51 — Spindle PWM configuration (**ADR-016**)
+
+*Method.* Read `TIM3->PSC`, `ARR`, `CR1`, `CCMR1`, `CCER` and `GPIOB`'s
+mode and alternate-function bits for `PB4`.
+
+*Pass.* `(PSC+1)×(ARR+1)` divides 84 MHz to exactly 10 000 Hz; `ARPE` and
+`OC1PE` both set; `CC1E` set; `PB4` in alternate-function mode on AF2.
+`measured` carries the computed frequency in Hz, so a failure says what the
+spindle is actually running at.
+
+*Why it matters.* The preload bits are what keep a duty change from landing
+mid-pulse and handing a VFD a short or stretched pulse. The AF check
+catches the `PB4`/`NJTRST` trap: re-enabling JTAG silently takes the pin.
+
+### HV-52 — The E-STOP kill is registered
+
+*Method.* `io_present()` and `safety_has_estop_action()`.
+
+*Pass.* Both true.
+
+*Why it matters.* Without the registration an E-STOP stops the axes and
+leaves the relay closed and the spindle turning until the superloop next
+runs `io_poll()`. On a machine whose relay is the spindle contactor, that
+is the difference between a safe stop and a dangerous one.
+
+### HV-53 — The interlock holds a request made at boot
+
+*Method.* At boot the engine is in `SAFE_IDLE`. Request the relay and 50 %
+duty, run one `io_poll()`, then restore.
+
+*Pass.* Both requests accepted, neither applied: generator stopped, relay
+off.
+
+*Why it matters.* This is the safe half of ADR-016's interlock. The other
+half is HV-55.
+
+### HV-54 — Spindle waveform (**scope**)
+
+*Method.* Scope on `PB4`, drives disconnected. Bring the machine to
+`READY`, then command 0, 1, 10, 250, 500, 750, 999 and 1000 per mille with
+`Tools/c5p1.py` (or from `main.c`). Measure frequency and duty at each.
+
+*Pass.* 10.000 kHz ± the crystal's tolerance at every duty; measured duty
+within one count (0.012 %) of commanded; **1000 per mille is a constant
+high with no notch**, and 0 leaves the pin low with the generator stopped.
+
+*Why it matters.* The 1000-per-mille case is where a plausible
+implementation gets it wrong: `CCR = ARR` looks right and leaves one
+inactive count per period — a 12 ns notch every 100 µs that a VFD input is
+entitled to read as an edge. Only `CCR = ARR+1` is genuinely 100 %. The
+host suite catches this in simulation; confirm it on the pin.
+
+### HV-55 — Outputs come on, and drop (**meter + scope**)
+
+**Wire nothing dangerous to the relay for this.** A meter or a test lamp.
+
+*Method.*
+1. From `SAFE_IDLE`, request the relay. Confirm it does **not** close.
+2. Enable the drives (`READY`). Confirm it closes now, with no glitch on
+   the way.
+3. With relay closed and spindle at 50 %, press E-STOP. Capture `PE2`,
+   `PB8` and `PB4` together.
+4. Release E-STOP, clear it, re-enable. Confirm **nothing comes back on
+   its own**.
+5. Force a `COMM_TIMEOUT` (unplug the cable mid-program). Confirm the relay
+   and spindle drop while `EN` (`PD15`) stays high.
+
+*Pass.* Step 3's `PE2`→relay-open and `PE2`→spindle-low intervals are
+bounded and comparable to HV-18's — they happen in the same interrupt.
+Step 4 shows no output returning without a fresh request. Step 5 is
+ADR-016 decision 2 made visible: drives held, work stopped.
+
+*Also confirm here:* `CNC_LED_ACTIVE_HIGH`. The run LED should be lit in
+`RUNNING`, blinking in `READY`, dark in `SAFE_IDLE`; the error LED solid in
+`EMERGENCY_STOP` and blinking in `FAULT`. If they are inverted, flip that
+one constant in `cnc_io_config.h` — it is an assumption, not a measurement
+(ADR-016).
+
+---
+
 ## 6. Results table
 
 `NOT RUN` is the correct entry until hardware exists. It must not be
@@ -622,14 +726,20 @@ replaced by an expectation.
 | HV-43 Input ISR cost | NOT RUN | — | — | Not an E-STOP latency figure |
 | HV-44 Chatter isolation | NOT RUN | — | — | Needs a real switch |
 | HV-45 Debounce windows measured | NOT RUN | — | — | **Replaces ADR-015's defaults** |
+| HV-50 Outputs safe at boot | NOT RUN | — | — | PINOUT: PB8 LOW at boot |
+| HV-51 Spindle PWM configuration | NOT RUN | — | — | ADR-016; expect 10000 Hz |
+| HV-52 E-STOP output kill registered | NOT RUN | — | — | ADR-016 decision 3 |
+| HV-53 Interlock holds at boot | NOT RUN | — | — | Safe half of the interlock |
+| HV-54 Spindle waveform | NOT RUN | — | — | 100 % must have no notch |
+| HV-55 Outputs come on and drop | NOT RUN | — | — | Also confirms LED polarity |
 
 ---
 
 ## 7. What the host test suite already establishes
 
 `cd Firmware && make test` — 1150 motion checks, 151 input/E-STOP checks,
-130 network checks and 316 protocol checks, all passing at the time of
-writing. The motion suite reconstructs the pin
+1160 output/spindle checks, 130 network checks and 347 protocol checks,
+all passing at the time of writing. The motion suite reconstructs the pin
 waveform from the BSRR word stream and the CPU-timed DIR writes, then
 measures it in nanoseconds, so it checks the same properties HV-1x will.
 
@@ -647,6 +757,16 @@ not restart" by actually being refused a clear. It establishes the filter's
 timing in milliseconds and the polarity normalisation the protocol depends
 on. It establishes **nothing** about EXTI, the NVIC, or how long any of it
 takes on silicon — those are HV-40..HV-45 and HV-18.
+
+The output suite (`make test-safety`'s companion, `make test-io`) drives
+the output manager against the real motion engine **and** the real input
+manager, so "the relay drops on E-STOP" is checked by actually asserting
+PE2 and looking at the pin, not by calling a kill function and trusting
+that something would have called it. It establishes the interlock in every
+engine state and the per-mille→compare arithmetic across its whole range —
+that arithmetic is where it caught a real off-by-one that would have made
+100 % duty unreachable. It establishes **nothing** about GPIOB, TIM3 or
+what a VFD makes of the waveform: those are HV-50..HV-55.
 
 The protocol suite (`make test-proto`) drives the session against the real
 motion engine on its simulation port, so backpressure, abort and the

@@ -7,6 +7,8 @@
 #include "net_config.h"
 #include "net_link.h"
 #include "safety_input.h"
+#include "io_outputs.h"
+#include "io_spindle.h"
 #include "stepgen.h"
 
 #include <string.h>
@@ -327,6 +329,66 @@ static void handle_control(const cnc_header_t *hdr, bool *out_accepted)
     }
 }
 
+/* ------------------------------------------------------ outputs ------- */
+
+/**
+ * OUTPUTS (Docs/PROTOCOL.md §9): relay bits and spindle duty, M9 + M10.
+ *
+ * Three ways to be refused, and they are deliberately distinguishable:
+ *
+ *   NOT_IMPLEMENTED  the subsystem is absent from this build
+ *   BAD_PARAM        the payload is malformed, names an output bit this
+ *                    firmware does not implement, or asks for a duty above
+ *                    100 %
+ *   (accepted)       the request was taken - which is NOT a promise that a
+ *                    pin moved. The interlock may hold it off, and STATUS
+ *                    reports what the pins are actually doing.
+ *
+ * Nothing is applied partially. A packet that sets the relay and an
+ * out-of-range duty changes neither, because a host that got half of what
+ * it asked for cannot tell which half.
+ */
+static void handle_outputs(const cnc_header_t *hdr, bool *out_accepted)
+{
+    cnc_outputs_t out;
+
+    if (!cnc_parse_outputs(hdr, &out)) {
+        reject(CNC_REJECT_BAD_PARAM, CNC_PFAULT_BAD_PARAM);
+        return;
+    }
+
+    if (!io_present()) {
+        /* The wire format is fixed so the plugin can be written against it,
+         * but this build cannot drive anything. Saying so is the honest
+         * reply; accepting silently would tell the host a relay switched. */
+        reject(CNC_REJECT_NOT_IMPLEMENTED, 0u);
+        return;
+    }
+
+    /* Validate everything before applying anything. */
+    const bool set_spindle = (out.spindle_pmille != 0xFFFFu);
+    if (set_spindle && out.spindle_pmille > SPINDLE_PMILLE_MAX) {
+        reject(CNC_REJECT_BAD_PARAM, CNC_PFAULT_BAD_PARAM);
+        return;
+    }
+    if ((out.out_mask & (uint16_t)~CNC_OUT_MASK_SUPPORTED) != 0u) {
+        reject(CNC_REJECT_BAD_PARAM, CNC_PFAULT_BAD_PARAM);
+        return;
+    }
+
+    if (!io_request_outputs(out.out_mask, out.out_value)) {
+        reject(CNC_REJECT_BAD_PARAM, CNC_PFAULT_BAD_PARAM);
+        return;
+    }
+    if (set_spindle && !io_spindle_set_pmille(out.spindle_pmille)) {
+        reject(CNC_REJECT_BAD_PARAM, CNC_PFAULT_BAD_PARAM);
+        return;
+    }
+
+    s.last_reject  = CNC_REJECT_NONE;
+    *out_accepted  = true;
+}
+
 /* ------------------------------------------------------- status ------- */
 
 void cnc_session_get_status(cnc_status_t *out)
@@ -353,10 +415,19 @@ void cnc_session_get_status(cnc_status_t *out)
      * fifteen zeroes as if they were readings; an all-zero word that a host
      * cannot distinguish from "no data" looks exactly like a machine with
      * every switch open - Docs/PROTOCOL.md §6.2, §11.
-     * OUTPUTS_PRESENT stays clear until M9/M10 exist. */
+     * Both flags track initialisation, not the build. */
     if (safety_input_present()) {
         flags     |= CNC_SFLAG_INPUTS_PRESENT;
         out->inputs = safety_inputs();
+    }
+    /* M9/M10 report what the pins are ACTUALLY doing, not what the host
+     * asked for. The two differ whenever the interlock is holding an
+     * output off, and that difference is the single most useful thing this
+     * packet can tell an operator wondering why the relay did not click. */
+    if (io_present()) {
+        flags                |= CNC_SFLAG_OUTPUTS_PRESENT;
+        out->outputs          = io_outputs_actual();
+        out->spindle_pmille   = io_spindle_actual();
     }
     out->flags = flags;
 
@@ -479,19 +550,9 @@ size_t cnc_session_on_datagram(const uint8_t *buf, size_t len, uint32_t now_ms,
         handle_control(&hdr, &accepted);
         break;
 
-    case CNC_OP_OUTPUTS: {
-        /* The wire format is fixed (Docs/PROTOCOL.md §9) so the plugin can
-         * be written against it, but M9 (outputs) and M10 (spindle PWM) do
-         * not exist yet. Answering NOT_IMPLEMENTED is the honest reply;
-         * accepting silently would tell the host a relay had switched. */
-        cnc_outputs_t out;
-        if (!cnc_parse_outputs(&hdr, &out)) {
-            reject(CNC_REJECT_BAD_PARAM, CNC_PFAULT_BAD_PARAM);
-        } else {
-            reject(CNC_REJECT_NOT_IMPLEMENTED, 0u);
-        }
+    case CNC_OP_OUTPUTS:
+        handle_outputs(&hdr, &accepted);
         break;
-    }
 
     default:
         /* Device->host opcodes arriving from the host. The codec accepted

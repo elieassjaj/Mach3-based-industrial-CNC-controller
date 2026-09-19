@@ -69,6 +69,12 @@ static struct {
     uint32_t chatter_mark_ms;
     uint32_t chatter_base[SAFETY_INPUT_COUNT];
     bool     present;
+
+    /* Registered by the output subsystem (M9/M10) so a relay and a spindle
+     * de-energise on the PE2 edge rather than at the next poll. Set once at
+     * init and never cleared, so the ISR never reads a half-written
+     * pointer. */
+    safety_estop_action_t estop_action;
 } s;
 
 /* ---------------------------------------------------------------------- */
@@ -106,6 +112,14 @@ void safety_input_on_estop_edge(void)
     if (safety_port_estop_raw_asserted()) {
         stepgen_emergency_stop();
 
+        /* Motion first, everything else second. The axes are the larger
+         * hazard and their stop is pure register writes; the outputs
+         * follow within the same interrupt, still far ahead of the
+         * superloop. */
+        if (s.estop_action != NULL) {
+            s.estop_action();
+        }
+
         if (!s.estop_asserted) {
             s.estop_asserts++;
         }
@@ -133,6 +147,9 @@ void safety_input_on_edge(void)
 static void estop_assert_from_poll(uint32_t now_ms)
 {
     stepgen_emergency_stop();
+    if (s.estop_action != NULL) {
+        s.estop_action();
+    }
     if (!s.estop_asserted) {
         s.estop_asserts++;
     }
@@ -275,8 +292,20 @@ void safety_input_poll(uint32_t now_ms)
 /* Init                                                                    */
 /* ---------------------------------------------------------------------- */
 
+void safety_set_estop_action(safety_estop_action_t fn)
+{
+    s.estop_action = fn;
+}
+
+bool safety_has_estop_action(void)
+{
+    return s.estop_action != NULL;
+}
+
 bool safety_input_init(void)
 {
+    /* Clears any registered E-STOP action too, which is why io_init()
+     * registers its kill AFTER this runs - see main.c's ordering. */
     memset(&s, 0, sizeof(s));
 
     if (!safety_port_init()) {

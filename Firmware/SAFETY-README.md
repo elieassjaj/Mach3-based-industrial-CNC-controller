@@ -99,8 +99,8 @@ Debug and Release configurations:
 
 | Setting | Value |
 |---|---|
-| Include paths | `../Motion/Inc`, `../Net/Inc`, `../Safety/Inc`, `../Platform/STM32F407/Inc` |
-| Source folders | `Motion`, `Net`, `Safety`, `Platform/STM32F407` |
+| Include paths | `../Motion/Inc`, `../Net/Inc`, `../Safety/Inc`, `../IO/Inc`, `../Platform/STM32F407/Inc` |
+| Source folders | `Motion`, `Net`, `Safety`, `IO`, `Platform/STM32F407` |
 
 `Platform/Host` is deliberately **not** a source folder: it holds the
 simulation ports, and compiling them for the target would collide with the
@@ -137,3 +137,7 @@ pending bits and dispatch callbacks behind this module's back.
   worn contact is not only a reporting problem.
 - Nothing here decides which pin is a limit or a home. If the machine needs
   that, it belongs in the PC-side plugin, not in this module.
+- The output subsystem registers its own kill on this module's E-STOP path
+  (`safety_set_estop_action()`), so `io_init()` must run **after**
+  `safety_input_init()` — this module's init clears that registration as
+  part of its own reset. HV-52 catches the wrong order.

@@ -2249,6 +2249,130 @@ this becomes significant, which is why it is counted and reported.
 
 **Validation result:** Host tests pass (151 checks); hardware TBD.
 
+---
+
+### ADR-016 — Output Manager and Spindle PWM
+
+**Status:** ACCEPTED for Phase 5 (M9, M10). Implemented in `Firmware/IO/`
+and `Firmware/Platform/*/Src/io_port_*.c`.
+
+**Context.** Section 21 requires the non-motion outputs to be separated
+from the hard real-time STEP/DIR subsystem and reachable "without allowing
+background software to interfere with STEP/DIR timing". Section 22 requires
+the spindle to be a separate subsystem again, and explicitly leaves its
+frequency, duty-cycle range, scaling, command source and update mechanism
+to be derived from the project requirements and the Mach3 SDK. ADR-010
+fixed what faults do to the drives but said nothing about what they do to a
+relay or a spinning tool. This ADR decides the five things that were open.
+
+**Decision.**
+
+1. **One interlock governs both, and it is recomputed from the engine state
+   every superloop iteration.** Outputs are permitted only in `READY` and
+   `RUNNING`. The subsystem never caches a decision: `io_poll()` reads
+   `stepgen_get_status()` and applies the answer, so an output cannot
+   outlive the condition that permitted it, whatever raced with what.
+
+2. **Every fault class inhibits the outputs — including the two ADR-010
+   exempts from dropping `EN`.** That exemption exists so an axis does not
+   drift or drop under gravity when the command stream pauses; it is about
+   *holding force*. A spinning tool is not holding force. When the stream
+   stops the axes stop, and leaving the spindle turning then burns a
+   stationary tool into the work and leaves a machine doing work with
+   nobody driving it. `SAFE_IDLE` inhibits too: reaching `READY` takes an
+   explicit `CONTROL:ENABLE_DRIVES`, and that deliberate act is the point
+   at which the machine is live (§32).
+   *This extends an ADR-010 clause the project owner confirmed for `EN`
+   only, and is flagged for confirmation on that basis.*
+
+3. **Off is reached from the interrupt, not from the superloop.**
+   `io_emergency_off()` is register-writes-only and is registered with the
+   E-STOP path by `io_init()`, so the relay drops on the `PE2` edge. On a
+   machine whose relay is the spindle contactor, the difference between
+   that and one main-loop iteration later is the difference between a safe
+   stop and a dangerous one. An emergency stop also *discards* the pending
+   requests rather than withholding them, so clearing the stop cannot
+   re-energise anything by itself (ADR-010: recovery is never automatic).
+
+4. **Spindle scaling: none, and the SDK settles it.** `spindle_pmille`
+   (0…1000) is a direct quantisation of the SDK's own
+   `MainPlanner->Spindle.ratio`, which
+   `SDK/ncPod/MachDevImplementation.cpp` reads as "speed from 0 - 1" and
+   clamps at 1 `[SDK-CONFIRMED]`. RPM never reaches this device: the host
+   owns the RPM↔ratio map (`SpindleFM::SetSpindleSpeed`) because it is the
+   only side that knows what spindle is fitted. Out-of-range is **refused,
+   not clamped** — a host asking for 150 % has a bug, and quietly giving it
+   100 % hides that bug behind a spinning tool. Note that `ncPod` never
+   sends a zero duty while the spindle is on (`if (vel == 0) vel = 1;`);
+   that is host policy and is deliberately *not* replicated, because when
+   this device is told zero it means zero.
+
+5. **The PWM period is refined from the `.ioc`'s, the frequency is not.**
+   The `.ioc` carries `PSC=83`/`ARR=99`: exactly 10 kHz, but only 100 duty
+   steps, so a host asking for 12.3 % would silently get 12 %. This port
+   programs `PSC=0`/`ARR=8399` instead — identical 10.000 kHz, 8400 steps,
+   84× the resolution, no prescaler. The frequency is the only spindle
+   number `Docs/PINOUT.md` fixes and it is unchanged; HV-51 reads the
+   divider back from the hardware and reports the actual frequency in Hz.
+   The compare register is preloaded, so a duty change lands at a period
+   boundary and never produces a short or stretched pulse.
+
+**Also fixed here, because nothing else owned it:** the two status LEDs
+report the engine state and are **not** host-commandable. A host-controlled
+"error" light can be made to lie, and on a board with no display this pair
+is frequently the only thing that says anything at all. `FAULT` blinks and
+`EMERGENCY_STOP` is solid, deliberately — one is cleared with a command,
+the other needs somebody to release a physical button first, and telling
+them apart from across a workshop is worth a distinct pattern.
+
+**Chosen values (OPEN, not measured):** LED blink periods 500 ms (`READY`)
+and 125 ms (`FAULT`). `CNC_LED_ACTIVE_HIGH` = 1 is an assumption read from
+the CubeMX-generated reset state (both LEDs driven LOW at init); no LED
+drive circuit is documented in this repository. HV-55 confirms it on a
+board, and until then Rule 9 applies.
+
+**Alternatives considered:**
+
+- *Letting the ADR-010 hold-position exception cover the spindle* —
+  rejected, see decision 2. The exception's own stated reason does not
+  transfer.
+- *Permitting outputs in `SAFE_IDLE`* — rejected as the conservative
+  default. A host wanting coolant before arming the drives is a plausible
+  workflow that nothing in this repository actually asks for; if it turns
+  out to be needed, this is a one-line change to `compute_inhibit()` and
+  belongs in a revision of this ADR, not in a call site.
+- *Clamping an out-of-range duty* — rejected, see decision 4.
+- *Keeping the `.ioc`'s `ARR=99`* — rejected: it silently discards the
+  bottom digit of every duty the wire format can carry, for no benefit.
+- *Host-commandable LEDs* — rejected, see above.
+- *Applying an `OUTPUTS` packet partially when one field is bad* —
+  rejected: a host that asked for two things and got one has no way to
+  discover which.
+
+**Timing impact:** None on the motion path. The subsystem touches three
+GPIO bits and one compare register, none of which the STEP DMA path reads,
+and it runs entirely in the superloop except the E-STOP kill, which is a
+handful of register writes inside an interrupt that already exists.
+
+**Memory impact:** ~40 bytes of static state. No buffers, no allocation.
+
+**CPU impact:** One `stepgen_get_status()` copy and a few stores per
+superloop iteration.
+
+**Risks:**
+
+1. Decision 2 extends an owner-confirmed ADR-010 clause; it is the safe
+   direction, but it is this ADR's inference and not the owner's words.
+2. `CNC_LED_ACTIVE_HIGH` is an assumption (see above).
+3. The blink periods are defaults, not measurements.
+4. `PB4` is `NJTRST` at reset. This works only because the project debugs
+   over SWD (§29). Re-enabling JTAG would silently take the spindle pin.
+5. Everything is verified on a host simulation of GPIO and a timer.
+   Nothing has been measured on silicon — HV-50..HV-55 are the tests that
+   change that, and Rule 10 forbids claiming otherwise until they run.
+
+**Validation result:** Host tests pass (1160 checks); hardware TBD.
+
 # 42. AI-Assisted Development Rules
 
 This repository is intended to support AI-assisted firmware development.
