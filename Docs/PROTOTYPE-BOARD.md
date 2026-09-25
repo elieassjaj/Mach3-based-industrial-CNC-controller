@@ -84,6 +84,45 @@ if the footprint is mirrored. The power pins would survive that, since
 Ordered by consequence. **PR-1 to PR-4 each stop the prototype from
 working for its purpose.**
 
+### 3.0 Status after owner review (2026-09-25)
+
+| | Status |
+|---|---|
+| PR-1 | **Resolved at assembly.** The 16 MHz part was only the library symbol; an **8 MHz** crystal will be fitted, which matches the firmware. The schematic value and BOM should still say 8 MHz, especially if the board house does assembly, and C2/C3 should be sized for the 8 MHz part's load capacitance. |
+| PR-2 | **Researched; see §3.1.** The code is correct against the project's own `EN` definition. Every common StepStick driver is active low, so on this socket the polarity is inverted. |
+| PR-3 | **Owner will fix on the PCB.** |
+| PR-4 | **Deferred to the test stage.** This is firmware configuration and does not affect the PCB. |
+
+### 3.1 Enable polarity of common drivers
+
+The manufacturer PDF hosts were not reachable from this environment, so
+these come from datasheet quotations in search results, not from reading
+the PDFs directly:
+
+| Driver | Pin | Low | High | Floating |
+|---|---|---|---|---|
+| Allegro A4988 | `ENABLE` | outputs **on** | outputs off | carrier-dependent |
+| TI DRV8825 | `nENBL` | outputs **on** | outputs off, STEP ignored | **on** (internal ~100 kΩ pull-down) |
+| Trinamic TMC2208 / 2209 / 2225 / 2226 | `ENN` | outputs **on** | power stage off, outputs float | carrier-dependent |
+| LV8729 StepStick modules | `EN` | sold as drop-in A4988/DRV8825 replacements; not confirmed from a primary source | | |
+| Leadshine DM542 (industrial) | `ENA+/ENA−` (opto) | opto **on** → drive **disabled** | opto off → enabled | **enabled** |
+
+So **all common StepStick drivers are active low**, and the firmware's
+active-high `EN` is inverted on this socket. That is a firmware problem,
+not a PCB problem, provided the firmware honours `CNC_EN_ACTIVE_HIGH`
+(today nothing reads it). The PCB is still involved in one respect: while
+the MCU is held in reset, `PD15` floats, and a DRV8825 reads a floating
+pin as **enabled**. Startup safety (§32) therefore calls for a **10 kΩ
+pull-up on the socket's `EN` net**, so the driver is off until the
+firmware decides otherwise.
+
+The final product's industrial drives also make polarity a wiring
+question. A DM542's opto input disables the drive when current flows,
+so whether "MCU high" means enabled depends on whether `ENA+` or `ENA−`
+is driven. A floating input on those drives also reads as **enabled**.
+The final PCB's `EN` interface should hold the drives disabled while the
+MCU is in reset.
+
 ### PR-1 — The crystal is 16 MHz; the firmware assumes 8 MHz ❌ critical
 
 `SystemClock_Config()`, `HSE_VALUE` and the `.ioc` all assume an 8 MHz HSE
