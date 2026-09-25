@@ -8,6 +8,7 @@
  */
 #include "stepgen.h"
 #include "stepgen_core.h"
+#include "stepgen_port.h"
 #include "sim_trace.h"
 #include "test_util.h"
 
@@ -593,6 +594,52 @@ static void test_queue(void)
 
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* EN polarity (CNC_EN_ACTIVE_HIGH)                                     */
+/* ------------------------------------------------------------------ */
+
+/* The rule every port uses for PD15, checked for BOTH polarities here, so
+ * flipping the macro on the bench cannot flip an edge case nobody tested.
+ * The STM32 port applies it through en_bsrr(); HV-06 checks the board. */
+static void test_en_polarity(void)
+{
+    TCASE("active high: enabled drives PD15 high, disabled drives it low");
+    CHECK(stepgen_en_pin_level(true,  true)  == true);
+    CHECK(stepgen_en_pin_level(false, true)  == false);
+    TDONE();
+
+    TCASE("active low: enabled drives PD15 low, disabled drives it high");
+    CHECK(stepgen_en_pin_level(true,  false) == false);
+    CHECK(stepgen_en_pin_level(false, false) == true);
+    TDONE();
+
+    TCASE("reading the pin back inverts the rule exactly, both polarities");
+    for (int ah = 0; ah <= 1; ah++) {
+        for (int en = 0; en <= 1; en++) {
+            const bool pin = stepgen_en_pin_level(en != 0, ah != 0);
+            CHECK(stepgen_en_enabled_from_pin(pin, ah != 0) == (en != 0));
+        }
+    }
+    TDONE();
+
+    TCASE("the disabled level is never the enabled level");
+    for (int ah = 0; ah <= 1; ah++) {
+        CHECK(stepgen_en_pin_level(false, ah != 0)
+              != stepgen_en_pin_level(true, ah != 0));
+    }
+    TDONE();
+
+    TCASE("the build's polarity is 0 or 1 and the engine starts disabled");
+    CHECK(CNC_EN_ACTIVE_HIGH == 0 || CNC_EN_ACTIVE_HIGH == 1);
+    CHECK(stepgen_init());
+    {
+        stepgen_status_t st;
+        stepgen_get_status(&st);
+        CHECK(!st.drives_enabled);
+    }
+    TDONE();
+}
+
 int main(void)
 {
     printf("CNC5AX-ETH stepgen host verification\n");
@@ -616,6 +663,7 @@ int main(void)
     test_configurable_tick();
     test_validation();
     test_queue();
+    test_en_polarity();
 
     printf("\n%d checks, %d failures\n", g_checks, g_fail);
     return g_fail ? 1 : 0;

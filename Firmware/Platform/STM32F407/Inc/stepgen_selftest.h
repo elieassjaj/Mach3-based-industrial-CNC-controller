@@ -23,6 +23,7 @@ typedef enum {
     HV_03_SRAM2_PLACEMENT,  /**< the ring really is in SRAM2               */
     HV_04_REFILL_COST,      /**< worst-case refill cycles (DWT)            */
     HV_05_ESTOP_LATENCY,    /**< emergency-stop path duration              */
+    HV_06_EN_POLARITY,      /**< EN was never at its enabled level at boot */
     HV_TEST_COUNT
 } stepgen_hv_test_t;
 

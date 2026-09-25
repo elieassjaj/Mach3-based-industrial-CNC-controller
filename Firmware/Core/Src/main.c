@@ -125,8 +125,8 @@ int main(void)
   /* Motion engine (Phase 1).
    *
    * stepgen_init() configures TIM8 + DMA2_Stream1 + the STEP/DIR/EN GPIOs
-   * and leaves the engine in SAFE_IDLE with the drives DISABLED (PD15 low,
-   * active high per Docs/PINOUT.md). Nothing moves until something calls
+   * and leaves the engine in SAFE_IDLE with the drives DISABLED (PD15 at
+   * the disabled level for CNC_EN_ACTIVE_HIGH). Nothing moves until something calls
    * stepgen_enable_drives() and stepgen_start(), which is deliberate: the
    * host protocol that will do so is Phase 3 work.
    *

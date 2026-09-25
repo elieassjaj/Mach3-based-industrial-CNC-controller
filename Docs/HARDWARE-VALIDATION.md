@@ -135,6 +135,24 @@ measurement; HV-04 decides. Mitigations are listed with RISK-1.
 *Pass.* Completes in fewer cycles than one base tick (42 cycles at
 168 MHz / 4 MHz), so no STEP edge can be emitted after the stop begins.
 
+### HV-06 — EN polarity agrees with the board and with CubeMX
+
+*Method.* Firmware self-check, run first so it sees the boot state.
+`measured` bit 0: `PD15` was already an output at the **enabled** level
+when `stepgen_init()` took over. bit 1: `PD15` is not at the disabled
+level now, in `SAFE_IDLE`. `expected` records the build's
+`CNC_EN_ACTIVE_HIGH`.
+
+*Pass.* `measured` = 0.
+
+*Why it matters.* `CNC_EN_ACTIVE_HIGH` controls every write the firmware
+makes to `PD15`, but not the level CubeMX's `MX_GPIO_Init()` applies about
+two seconds earlier. If the two disagree, the drives are energised through
+those two seconds of every boot, while the firmware believes they are off.
+Bit 0 is exactly that mismatch. Fix it with PD15's initial output level in
+CubeMX, not in code. Confirm the direction on a meter as well: with the
+drives connected, `SAFE_IDLE` must leave the motors free to turn by hand.
+
 ---
 
 ## 5. Waveform tests (HV-1x)
@@ -705,6 +723,7 @@ replaced by an expectation.
 | HV-03 SRAM2 placement | **PASS (static)** | `0x2001C000`–`0x2001D000` | 2026-09-16 | Confirmed in the linked map; re-confirm at runtime on target |
 | HV-04 Refill cost | NOT RUN | — | — | RISK-1; estimate ~60% duty |
 | HV-05 E-STOP path | NOT RUN | — | — | |
+| HV-06 EN polarity | NOT RUN | — | — | `CNC_EN_ACTIVE_HIGH` vs board pull and CubeMX PD15 level |
 | HV-10 1 axis @ 2 MHz | NOT RUN | — | — | |
 | HV-11 3 axes @ 2 MHz | NOT RUN | — | — | **The §30 requirement** |
 | HV-12 5 axes @ 2 MHz | NOT RUN | — | — | Beyond requirement |
@@ -744,7 +763,7 @@ replaced by an expectation.
 
 ## 7. What the host test suite already establishes
 
-`cd Firmware && make test` — 1150 motion checks, 151 input/E-STOP checks,
+`cd Firmware && make test` — 1163 motion checks, 151 input/E-STOP checks,
 1160 output/spindle checks, 130 network checks and 347 protocol checks,
 all passing at the time of writing. The motion suite reconstructs the pin
 waveform from the BSRR word stream and the CPU-timed DIR writes, then

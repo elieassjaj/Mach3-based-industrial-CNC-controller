@@ -34,9 +34,30 @@ void     stepgen_port_emergency_stop(void);
 /** Halt STEP output but leave the drives energised (ADR-010 hold-position). */
 void     stepgen_port_halt_hold(void);
 
-/** Driver ENABLE output (PD15, active high per Docs/PINOUT.md). */
+/** Driver ENABLE output (PD15). Polarity: CNC_EN_ACTIVE_HIGH. */
 void     stepgen_port_set_enable(bool enable);
 bool     stepgen_port_get_enable(void);
+
+/**
+ * The EN polarity rule, in one place.
+ *
+ * Every port computes the PD15 level through this, so the STM32 port and
+ * the host test suite apply the same rule and the suite can check it for
+ * both polarities without rebuilding. Pure, and header-only so an
+ * interrupt-context caller (the emergency stop) pays no call.
+ *
+ * @return true if PD15 must be HIGH for the requested state.
+ */
+static inline bool stepgen_en_pin_level(bool enable, bool active_high)
+{
+    return enable == active_high;
+}
+
+/** Inverse: given the pin level, are the drives enabled? */
+static inline bool stepgen_en_enabled_from_pin(bool pin_high, bool active_high)
+{
+    return pin_high == active_high;
+}
 
 /** Write a GPIOD BSRR word. This is the ADR-006 play-time DIR write. */
 void     stepgen_port_write_dir(uint32_t bsrr_word);

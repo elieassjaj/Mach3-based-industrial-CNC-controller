@@ -93,6 +93,23 @@ working for its purpose.**
 | PR-3 | **Owner will fix on the PCB.** |
 | PR-4 | **Deferred to the test stage.** This is firmware configuration and does not affect the PCB. |
 
+### 3.0.1 Revised schematic re-checked (2026-09-25, second revision)
+
+Checked against the first review by diffing the two PDFs' text and
+inspecting each changed region. Nothing else on the sheet changed.
+
+| # | Owner's fix | In the schematic |
+|---|---|---|
+| PR-1 | Crystal 8 MHz | ✅ `ABL-8.000MHZ-B2-T`. C2/C3 are still marked "15-20pF": give them one value, sized for this crystal's load capacitance |
+| PR-2 | EN pull-up | ✅ `R9` 10 kΩ from VCC to the `EN` net at `PD15`. Correct for active-low drivers; **it must become a pull-down if the bench shows an active-high driver** (see `CNC_EN_ACTIVE_HIGH`) |
+| PR-5 | P5 checked in the netlist | Owner confirmed every STEP/DIR net is connected; row pairing does not matter for the tests |
+| PR-6 | LEDs | ✅ `PB2` → `RUN`, `PB1` → `ERR`, now matching `PINOUT.md`. Both are active high (pin → 1 kΩ → LED → GND), which is what `CNC_LED_ACTIVE_HIGH = 1` expects |
+| PR-7 | Regulator capacitors | ✅ `C15` 10 µF on the 7805 output, which is also the AMS1117 input. ✅ `C16` 10 µF beside `C6` 10 µF on the AMS1117 output, 20 µF in total. The AMS1117 datasheet's worst-case figure is 22 µF **tantalum**; if both are ceramic, make one of them tantalum or electrolytic for its ESR |
+| PR-8 | LED resistors | ✅ `R3`, `R4` = 1 kΩ |
+| PR-9 | Test points | Placed in the PCB editor; not visible in a schematic print |
+| — | LAN header orientation | Owner confirmed pin 1 lands on pin 1 |
+| **PR-10** | **Datasheet decoupling** | ❌ **Not in the schematic.** The bank is still seven 100 nF (`C7`–`C12`, `C14`). There is no 4.7 µF at a VDD pin, and VDDA (pin 22) has no 100 nF + 1 µF of its own. `C16` can serve as the 4.7 µF if the layout puts it next to a VDD pin; VDDA still needs its pair |
+
 ### 3.1 Enable polarity of common drivers
 
 The manufacturer PDF hosts were not reachable from this environment, so

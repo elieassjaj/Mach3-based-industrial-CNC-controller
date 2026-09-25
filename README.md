@@ -306,7 +306,7 @@ Listed so they are not mistaken for working functionality:
 - Watchdog, heap/stack sizes and LwIP memory sizing are still at CubeMX defaults. MAC and IP are no longer: both come from `Firmware/Net/Inc/net_config.h` as of Phase 2.
 - PHY SMI address is auto-scanned by the LAN8742 driver rather than assumed. On the prototype's Waveshare module the `PHYAD0` strap is tied high, so the address is **1** (`Docs/PROTOTYPE-BOARD.md` §5). The final PCB's strap is its own design choice, and the scan covers either.
 - **PHY reset timing on the final PCB:** ADR-013's pulse on `PB0` meets `trstia` (100 µs) but is released a few milliseconds into boot. The LAN8720A also requires `nRST` held until ≥ 25 ms after power-up (`tpurstd`). Needs a firmware change and an `nRST` pull-down before the final board (`Docs/PROTOTYPE-BOARD.md` §7). The prototype is unaffected, because the module resets itself.
-- `CNC_EN_ACTIVE_HIGH` in `cnc_motion_config.h` is defined but **never read**: the STEP port hard-codes an active-high `EN`. The prototype's driver socket needs the opposite polarity (PR-2).
+- **EN polarity is a build switch:** `CNC_EN_ACTIVE_HIGH` in `cnc_motion_config.h` (`1` active high, the default; `0` active low). It controls every write to `PD15`. It is open for the prototype, whose StepStick-style drivers are active low, and will be settled on the bench. The board's EN pull resistor and PD15's CubeMX initial level must match it; HV-06 checks the latter.
 - A CubeMX regeneration remains the main hazard to both subsystems: it silently reverted the static IP configuration once already (`Docs/PHASE2-STATUS.md` §2). Run the self-tests after every regeneration.
 
 ---

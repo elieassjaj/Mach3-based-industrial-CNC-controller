@@ -29,6 +29,17 @@ static uint32_t              s_ring;
 static uint32_t              s_tick_hz;
 static volatile uint32_t     s_dma_errors;
 static volatile bool         s_enabled;
+static bool                  s_en_enabled_at_boot;
+
+/* BSRR word that puts PD15 at the level meaning @p enable, honouring
+ * CNC_EN_ACTIVE_HIGH. One store, no read-modify-write: safe from the
+ * emergency-stop interrupt. */
+static inline uint32_t en_bsrr(bool enable)
+{
+    return stepgen_en_pin_level(enable, CNC_EN_ACTIVE_HIGH != 0)
+         ? (uint32_t)EN_PIN_MASK_GPIOD
+         : ((uint32_t)EN_PIN_MASK_GPIOD << 16);
+}
 
 /* ---------------------------------------------------------------------- */
 
@@ -63,11 +74,24 @@ bool stepgen_port_init(stepgen_boundary_cb_t cb, uint32_t *step_buf,
     RCC->APB2ENR |= STEPGEN_TIM_RCC_APB2ENR_BIT;
     (void)RCC->APB2ENR;                     /* ensure the write landed */
 
+    /* Record what MX_GPIO_Init() left on EN before overwriting it. If PD15
+     * is already an output at the ENABLED level, the drives have been live
+     * since MX_GPIO_Init(), about two seconds ago. That happens when
+     * CNC_EN_ACTIVE_HIGH and the CubeMX initial level of PD15 disagree.
+     * HV-06 reports it; nothing here can undo those two seconds. */
+    {
+        const uint32_t sh        = EN_PIN * 2u;
+        const bool     is_output = ((STEPGEN_GPIO_EN->MODER >> sh) & 3u) == 1u;
+        const bool     pin_high  = (STEPGEN_GPIO_EN->ODR & EN_PIN_MASK_GPIOD) != 0u;
+        s_en_enabled_at_boot = is_output
+            && stepgen_en_enabled_from_pin(pin_high, CNC_EN_ACTIVE_HIGH != 0);
+    }
+
     /* Drive everything safe BEFORE the pins become outputs, so no transient
-     * appears on a STEP or ENABLE line at power-up (§32). EN is active high
-     * (Docs/PINOUT.md), so LOW is the disabled state. */
+     * appears on a STEP or ENABLE line at power-up (§32). The disabled EN
+     * level follows CNC_EN_ACTIVE_HIGH. */
     STEPGEN_GPIO_STEP->BSRR = ((uint32_t)STEP_PINS_MASK_GPIOA) << 16;
-    STEPGEN_GPIO_EN->BSRR   = ((uint32_t)EN_PIN_MASK_GPIOD) << 16;
+    STEPGEN_GPIO_EN->BSRR   = en_bsrr(false);
     s_enabled = false;
 
     gpio_make_output(STEPGEN_GPIO_STEP, STEP_PINS_MASK_GPIOA);
@@ -182,18 +206,18 @@ void stepgen_port_emergency_stop(void)
     STEPGEN_TIM->CR1 &= ~(uint32_t)TIM_CR1_CEN;
     STEPGEN_TIM->DIER = 0;
     STEPGEN_GPIO_STEP->BSRR = ((uint32_t)STEP_PINS_MASK_GPIOA) << 16;
-    STEPGEN_GPIO_EN->BSRR   = ((uint32_t)EN_PIN_MASK_GPIOD) << 16;  /* EN low */
+    STEPGEN_GPIO_EN->BSRR   = en_bsrr(false);        /* drives disabled */
     STEPGEN_DMA_STREAM->CR &= ~DMA_SxCR_EN;
     s_enabled = false;
 }
 
 void stepgen_port_set_enable(bool enable)
 {
-    /* EN is ACTIVE HIGH (Docs/PINOUT.md, owner-verified). */
-    STEPGEN_GPIO_EN->BSRR = enable ? (uint32_t)EN_PIN_MASK_GPIOD
-                                   : (((uint32_t)EN_PIN_MASK_GPIOD) << 16);
+    STEPGEN_GPIO_EN->BSRR = en_bsrr(enable);       /* CNC_EN_ACTIVE_HIGH */
     s_enabled = enable;
 }
+
+bool stepgen_port_en_enabled_at_boot(void) { return s_en_enabled_at_boot; }
 
 bool     stepgen_port_get_enable(void) { return s_enabled; }
 void     stepgen_port_write_dir(uint32_t bsrr) { STEPGEN_GPIO_DIR->BSRR = bsrr; }

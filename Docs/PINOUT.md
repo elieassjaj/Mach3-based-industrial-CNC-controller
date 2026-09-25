@@ -35,9 +35,12 @@ All five STEP pins are on the **same GPIO port (GPIOA)**, in sequential order, s
 ## EN pin (GPIOD)
 
 * **EN_PIN:** `PD15` (`GPIO_PIN_15`) — drive enable for the axis drivers.
-* **Polarity: ACTIVE HIGH.** `HIGH` = drivers enabled, `LOW` = drivers disabled.
-* Consequence for start-up safety: the reset/initial state of `PD15` must be `LOW`, so the drivers stay disabled until the firmware has completed initialization and reached a known-safe state (`Docs/FIRMWARE-ARCHITECTURE.md` §32). The generated `MX_GPIO_Init()` already drives `PD15` LOW before configuring it as an output, which satisfies this.
-* The same applies to any fault or emergency-stop response: de-asserting (`LOW`) disables the drivers.
+* **Polarity: ACTIVE HIGH by default** — `HIGH` = drivers enabled, `LOW` = drivers disabled.
+  **Configurable:** `CNC_EN_ACTIVE_HIGH` in `Firmware/Core/Inc/cnc_motion_config.h` (`1` active high, `0` active low). Every firmware write to `PD15` goes through it: the boot level, enable, disable and emergency stop. **Open for the prototype:** every common StepStick driver (A4988, DRV8825, TMC220x) is active low, and the owner will settle the polarity on the bench (`Docs/PROTOTYPE-BOARD.md` §3.1).
+* Consequence for start-up safety: while the MCU is in reset and until the firmware takes over, `PD15` must sit at the **disabled** level, so the drivers stay off until the firmware has reached a known-safe state (`Docs/FIRMWARE-ARCHITECTURE.md` §32). Two things outside the firmware must therefore match `CNC_EN_ACTIVE_HIGH`:
+  * **the pull resistor on the EN net:** a pull-down for active high, a pull-up for active low (the prototype has `R9` = 10 kΩ pull-up);
+  * **the initial output level of `PD15` in CubeMX.** `MX_GPIO_Init()` applies it about two seconds before the motion engine takes over. It is `Low` today, which is correct for active high only. HV-06 reports a mismatch on the first boot.
+* The same applies to any fault or emergency-stop response: the firmware drives `PD15` to the disabled level for the configured polarity.
 
 ---
 
