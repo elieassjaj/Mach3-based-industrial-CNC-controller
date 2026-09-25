@@ -18,9 +18,10 @@
 #include "net_config.h"
 
 /* ---------------------------------------------------------- PHY_NRST ---- */
-/* Docs/PINOUT.md: PHY_NRST = PB0, active low. The PHY module carries a
- * 4.7k pull-up on nRST and no reset supervisor, so the line idles released
- * and every reset is firmware-driven (ADR-013).                            */
+/* Docs/PINOUT.md: PHY_NRST = PB0, active low. On the final PCB this drives
+ * the LAN8720A's nRST directly (ADR-013). On the prototype's Waveshare
+ * module nRST is not on the header, so PB0 reaches nothing and the module's
+ * own 4.7k + 100nF RC resets the PHY (Docs/PROTOTYPE-BOARD.md section 5). */
 #define NET_PHY_NRST_GPIO           GPIOB
 #define NET_PHY_NRST_RCC_AHB1ENR    RCC_AHB1ENR_GPIOBEN
 #define NET_PHY_NRST_PIN            0u

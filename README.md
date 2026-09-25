@@ -54,6 +54,33 @@ The central architectural rule is:
 
 The **authoritative MCU pin mapping is `Docs/PINOUT.md`**. The README intentionally does not duplicate the complete pin assignment so that the pinout has a single source of truth.
 
+### Prototype board vs. final PCB
+
+Firmware bring-up happens on a **bench prototype** first:
+[`prototype_test/prototype_sch.pdf`](prototype_test/prototype_sch.pdf). It
+is not the product, and it differs from the final PCB where it matters:
+
+| | Prototype | Final PCB |
+|---|---|---|
+| Ethernet PHY | Waveshare LAN8720 ETH Board **module** on a 2×7 header | LAN8720A **IC** on the board |
+| PHY reset | The module resets itself (on-board RC); `PB0` reaches nothing | `nRST` on `PB0` |
+| Motor drive | One StepStick-style driver socket, axis chosen with jumpers | External industrial drives |
+| Inputs | `PE2` (E-STOP), `PE3`, `PE4` on switches; the rest tied inactive | All 15 conditioned |
+
+The prototype schematic has been checked pin by pin against `Docs/PINOUT.md`
+and the datasheets: **[`Docs/PROTOTYPE-BOARD.md`](Docs/PROTOTYPE-BOARD.md)**.
+Every MCU pin number is correct and the Ethernet header matches the module
+exactly. Four findings stop it working as drawn:
+
+- **PR-1:** the crystal is 16 MHz, but the firmware is configured for
+  8 MHz. The PLL would run out of spec, so **do not flash the current
+  firmware as it is**.
+- **PR-2:** the driver socket's `EN` is active low; the project's is
+  active high.
+- **PR-3:** the driver socket's RESET and SLEEP pins float.
+- **PR-4:** the 250 ns STEP pulse is too short for a StepStick driver.
+  `stepgen_configure_max_rate()` fixes it without a hardware change.
+
 ---
 
 ## System Architecture
@@ -121,6 +148,7 @@ Mach3-based-industrial-CNC-controller/
 │   ├── PHASE5-STATUS.md
 │   ├── PINOUT.md
 │   ├── PROTOCOL.md
+│   ├── PROTOTYPE-BOARD.md          bench prototype: pin check and findings
 │   ├── PRE-IMPLEMENTATION-DECISIONS.md
 │   └── SYSTEM-ARCHITECTURE.md
 │
@@ -157,6 +185,10 @@ Mach3-based-industrial-CNC-controller/
 │
 ├── Tools/
 │   └── c5p1.py                     PC-side protocol client (no Mach3 needed)
+│
+├── prototype_test/
+│   ├── prototype_sch.pdf           bench prototype schematic (not the product)
+│   └── README.md
 │
 ├── LAN8720A/
 │   ├── LAN8720
@@ -200,6 +232,7 @@ Mach3-based-industrial-CNC-controller/
 | [`Docs/PHASE3-STATUS.md`](Docs/PHASE3-STATUS.md) | Phase 3 (UDP + protocol) results, decisions, risks and what Phase 4 must know |
 | [`Docs/PHASE4-STATUS.md`](Docs/PHASE4-STATUS.md) | Phase 4 (digital inputs + E-STOP, M3) results, decisions, risks and what the plugin must know |
 | [`Docs/PHASE5-STATUS.md`](Docs/PHASE5-STATUS.md) | Phase 5 (relay, LEDs, spindle PWM, M9/M10) results, decisions and risks |
+| [`Docs/PROTOTYPE-BOARD.md`](Docs/PROTOTYPE-BOARD.md) | The bench prototype (`prototype_test/`): pin-by-pin check against `PINOUT.md`, findings PR-1..PR-10, the firmware settings it needs, and what carries forward to the final PCB |
 | [`Docs/PROTOCOL.md`](Docs/PROTOCOL.md) | **Authoritative C5P1 wire format**: framing, opcodes, motion encoding, sequencing, flow control, status |
 | [`Docs/MACH3-INTERFACE.md`](Docs/MACH3-INTERFACE.md) | How Mach3 drives an external motion device, established from the SDK |
 | [`Docs/FIRMWARE-IMPLEMENTATION-PLAN.md`](Docs/FIRMWARE-IMPLEMENTATION-PLAN.md) | Firmware module breakdown, protocol dependencies, frozen-assumption list, implementation/verification order |
@@ -266,12 +299,14 @@ Listed so they are not mistaken for working functionality:
 
 - **Nothing above has been confirmed on hardware.** Every claim is from source, the linker map and host tests. The 2 MHz three-axis requirement (HV-11) and the Ethernet timing-isolation requirement (HV-15) are both unmeasured, and `Docs/MOTION-ENGINE.md` Rule 8 forbids claiming either until they are.
 - The spindle PWM period is `PSC=0`/`ARR=8399` at runtime, not the `.ioc`'s `PSC=83`/`ARR=99`: identical 10.000 kHz, 8400 duty steps instead of 100 (ADR-016). The port re-applies it at boot, so a regeneration cannot revert it, and HV-51 reads it back.
-- The LED drive polarity (`CNC_LED_ACTIVE_HIGH`) is read from the CubeMX reset state, not from a schematic — none exists here for that stage. HV-55 confirms it.
+- The LED drive polarity (`CNC_LED_ACTIVE_HIGH` = 1) is **confirmed active high for the prototype** by `prototype_test/prototype_sch.pdf`. The final PCB must keep it, or HV-55 will show otherwise.
 - No Mach3 integration: the UDP and protocol layers exist (Phase 3) but nothing on the PC side speaks to them except `Tools/c5p1.py`.
 - The digital-input debounce windows (3 ms, 50 ms) are documented defaults, not measurements — HV-45 is the test that replaces them (ADR-015).
 - Probing has no capture path: `STATUS.inputs` is a 50 Hz state report, and a probe needs the position latched at the edge.
 - Watchdog, heap/stack sizes and LwIP memory sizing are still at CubeMX defaults. MAC and IP are no longer: both come from `Firmware/Net/Inc/net_config.h` as of Phase 2.
-- PHY SMI address is auto-scanned by the LAN8742 driver rather than assumed, which resolves the address-strap ambiguity noted in `Docs/ETHERNET.md`. The value the scan actually finds is recorded by HV-25 and is still unknown.
+- PHY SMI address is auto-scanned by the LAN8742 driver rather than assumed. On the prototype's Waveshare module the `PHYAD0` strap is tied high, so the address is **1** (`Docs/PROTOTYPE-BOARD.md` §5). The final PCB's strap is its own design choice, and the scan covers either.
+- **PHY reset timing on the final PCB:** ADR-013's pulse on `PB0` meets `trstia` (100 µs) but is released a few milliseconds into boot. The LAN8720A also requires `nRST` held until ≥ 25 ms after power-up (`tpurstd`). Needs a firmware change and an `nRST` pull-down before the final board (`Docs/PROTOTYPE-BOARD.md` §7). The prototype is unaffected, because the module resets itself.
+- `CNC_EN_ACTIVE_HIGH` in `cnc_motion_config.h` is defined but **never read**: the STEP port hard-codes an active-high `EN`. The prototype's driver socket needs the opposite polarity (PR-2).
 - A CubeMX regeneration remains the main hazard to both subsystems: it silently reverted the static IP configuration once already (`Docs/PHASE2-STATUS.md` §2). Run the self-tests after every regeneration.
 
 ---

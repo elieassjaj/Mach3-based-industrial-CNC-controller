@@ -201,7 +201,7 @@ about one.
 | # | Item | Status |
 |---|---|---|
 | RISK-5a | ADR-016 decision 2 extends an ADR-010 clause the owner confirmed for `EN` only. It is the safe direction, but it is inference | Open — owner confirmation |
-| RISK-5b | `CNC_LED_ACTIVE_HIGH` is read from the CubeMX reset state, not from a drive circuit — none is documented here | Open — HV-55 |
+| RISK-5b | `CNC_LED_ACTIVE_HIGH` is read from the CubeMX reset state, not from a drive circuit | **Closed for the prototype**: `prototype_test/prototype_sch.pdf` wires both LEDs active high (`Docs/PROTOTYPE-BOARD.md` PR-6). Re-check on the final PCB |
 | RISK-5c | Blink periods are defaults, not measurements | Accepted |
 | RISK-5d | `PB4` is `NJTRST` at reset; this works only because the project debugs over SWD (§29). Re-enabling JTAG silently takes the spindle pin | Documented; HV-51 catches it |
 | RISK-5e | The `.ioc` still carries `PSC=83`/`ARR=99`. The port overrides it at boot, so a regeneration cannot break it — but the two now disagree on paper | Documented — ADR-016, HV-51 |

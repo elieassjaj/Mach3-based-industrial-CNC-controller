@@ -1953,6 +1953,18 @@ the original eight left open pending a project-owner call
   sufficient at cold power-up in practice, but is not a controlled,
   firmware-owned reset on every reset path (e.g. a warm/software MCU
   reset that does not re-power the PHY).
+- **Correction (prototype review, `Docs/PROTOTYPE-BOARD.md` §5).** Both
+  premises above describe the Waveshare module wrongly. Its `nRST` is
+  **not on its header**, and it has an RC network (4.7 kΩ + 100 nF), not a
+  plain pull-up. On the prototype this ADR's pulse therefore reaches
+  nothing. The decision still stands for the **final PCB**, where the
+  LAN8720A's `nRST` is wired to `PB0`, but one requirement was missed
+  there: this ADR sized the pulse against `trstia` (100 µs) only. The
+  datasheet also requires `nRST` to stay asserted until ≥ 25 ms after the
+  supplies reach 80 % (`tpurstd`, Table 5-9), and the current
+  implementation releases it a few milliseconds into boot. That must be
+  fixed before the final board runs, and the board should carry a
+  pull-down on `nRST` (`Docs/PROTOTYPE-BOARD.md` §7).
 - **150 µs is the project owner's confirmed value**, chosen with explicit
   margin over the LAN8720A datasheet's general `trstia` reset-assertion
   minimum (~100 µs) — the same figure `Docs/ETHERNET.md` §2.2 had already

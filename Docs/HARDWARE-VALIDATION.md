@@ -310,6 +310,13 @@ down there means nothing.
 
 ### HV-20 — PHY reset pulse (**ADR-013**)
 
+> **Not meaningful on the prototype.** The LAN8720 module does not bring
+> `nRST` to its header, so `PB0` reaches nothing there. The self-check reads
+> `PB0` back, so it **passes without measuring anything**. Run HV-20 on the
+> final PCB, **probing `nRST` itself, not `PB0`**, and add a check that the
+> release comes ≥ 25 ms after power-up (`tpurstd`). See
+> `Docs/PROTOTYPE-BOARD.md` §5 and §6.1.
+
 *Method.* Firmware self-check, plus a scope on `PB0` for the definitive
 measurement.
 

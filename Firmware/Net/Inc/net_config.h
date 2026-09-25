@@ -55,9 +55,16 @@
 #define NET_MAC_5          0x01u
 
 /* -------------------------------------------------- PHY reset (ADR-013) - */
-/* The board has no RC delay or reset supervisor on the PHY's nRST - just a
- * 4.7k pull-up (Docs/PINOUT.md, LAN8720A/LAN8720-ETH-Board-Schematic.pdf) -
- * so the reset is entirely the firmware's job.
+/* On the FINAL PCB the LAN8720A's nRST is wired to PB0 and this reset is the
+ * firmware's job. On the PROTOTYPE (Waveshare LAN8720 module) nRST is not on
+ * the module's header at all and the module resets itself through its own
+ * 4.7k + 100nF RC, so this pulse reaches nothing there
+ * (Docs/PROTOTYPE-BOARD.md section 5).
+ *
+ * Known gap for the final PCB: the datasheet also requires nRST to stay
+ * asserted until >= 25 ms after the supplies reach 80 % (tpurstd, Table
+ * 5-9). This pulse is released a few milliseconds into boot and does not
+ * yet meet that (Docs/PROTOTYPE-BOARD.md section 7).
  *
  * Assertion time: LAN8720A datasheet DS00002165C Table 5-9 gives
  * trstia = 100 us minimum ("nRST input assertion time"). ADR-013 adopts
