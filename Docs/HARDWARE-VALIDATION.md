@@ -431,6 +431,13 @@ These need the board, a PC on `192.168.5.100`, and `Tools/c5p1.py`. No
 Mach3 and no plugin: the point of Phase 3 is that the firmware's protocol
 is testable on its own.
 
+On Windows, run the tool as `python c5p1.py ...` from the `Tools`
+directory; the `./c5p1.py` form below is the same command. Each run is its
+own session and re-synchronises `seq` and `block_seq` with the device at
+connect, so commands can be run one after another. `python c5p1.py shell`
+keeps one session open and also reads a script from standard input. Run
+`python test_c5p1.py` once on the test PC first: it needs no board.
+
 ### HV-30 — The device answers on the wire
 
 *Method.* `./c5p1.py info`
@@ -491,8 +498,10 @@ commanded total to within one step.
 
 ### HV-35 — A lost block stops the machine
 
-*Method.* This one needs a deliberate gap. Easiest is a small edit to the
-tool's `block_seq` handling, or a firewall rule dropping one datagram.
+*Method.* This one needs a deliberate gap:
+`./c5p1.py move --axis X --steps 4000 --seconds 1 --gap-after 1` skips one
+`block_seq` after the first block. A firewall rule dropping one datagram
+also works.
 
 *Pass.* `proto_faults` shows `SEQ_GAP`, motion stops, `EN` stays asserted,
 and **no further motion is executed until `CONTROL:CLEAR_FAULT`** — sending

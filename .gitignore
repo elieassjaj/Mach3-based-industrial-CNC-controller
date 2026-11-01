@@ -26,3 +26,7 @@ Thumbs.db
 # Python bytecode from the PC-side tools
 __pycache__/
 *.pyc
+
+# Python bytecode (Tools/)
+__pycache__/
+*.pyc

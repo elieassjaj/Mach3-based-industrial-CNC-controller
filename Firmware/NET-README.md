@@ -126,16 +126,31 @@ reports the physical layer only.
 third-party Python packages. Set the PC NIC to `192.168.5.100/24` first.
 
 ```sh
-./c5p1.py info                                   # HELLO -> INFO
-./c5p1.py watch                                  # follow the status stream
-./c5p1.py enable && ./c5p1.py start
-./c5p1.py move --axis X --steps 2000 --seconds 2
-./c5p1.py stop
-./c5p1.py raw --corrupt crc                      # device must stay silent
+python c5p1.py info                              # HELLO -> INFO
+python c5p1.py watch                             # follow the status stream
+python c5p1.py enable
+python c5p1.py start
+python c5p1.py move --axis X --steps 2000 --seconds 2
+python c5p1.py outputs --relay on --spindle 500  # relay + spindle duty
+python c5p1.py stop
+python c5p1.py raw --corrupt crc                 # device must stay silent
+python c5p1.py shell                             # one session, interactive
+python c5p1.py shell < bench.txt                 # ...or from a script
 ```
 
-`move` and `stream` command real motion — run them with the drives
-disconnected until the machine is trusted.
+Each run opens a new socket and starts again at `seq` 1. The device keeps
+the highest `seq` it has seen, so the tool re-synchronises at connect: a
+`HELLO` answered with `STATUS` instead of `INFO` carries `last_seq_seen`,
+and the tool continues above it. `move` does the same for `block_seq`.
+Replies are matched by their `seq` echo, never by arrival order, because
+the device also streams `STATUS` every 20 ms on its own.
+
+`move` and `outputs` command real motion and real outputs — run them with
+the drives disconnected until the machine is trusted.
+
+`python ../Tools/test_c5p1.py` tests the tool without a board: the codec
+against golden packets from the C encoder, and the session rules against a
+local fake device.
 
 The device is passive: it transmits nothing until it receives a valid
 packet, so every session starts with a `HELLO`. If nothing comes back, that

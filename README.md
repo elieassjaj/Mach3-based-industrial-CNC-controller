@@ -184,7 +184,8 @@ Mach3-based-industrial-CNC-controller/
 │   └── .project, .cproject, .mxproject, .settings/
 │
 ├── Tools/
-│   └── c5p1.py                     PC-side protocol client (no Mach3 needed)
+│   ├── c5p1.py                     PC-side protocol client (no Mach3 needed)
+│   └── test_c5p1.py                its tests: no board needed, runs on Windows
 │
 ├── prototype_test/
 │   ├── prototype_sch.pdf           bench prototype schematic (not the product)
