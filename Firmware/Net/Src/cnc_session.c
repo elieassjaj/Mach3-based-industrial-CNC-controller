@@ -45,6 +45,13 @@ typedef struct {
 
 static session_t s;
 
+/* Command-stream faults after which no motion is accepted until the host
+ * acknowledges them with CONTROL:CLEAR_FAULT (Docs/PROTOCOL.md §7.3, §7.4).
+ * The controlled stop that raised them has already discarded the queue, so
+ * anything streamed afterwards would run with a piece of the toolpath
+ * missing. QUEUE_FULL and BAD_PARAM are informational and do not block. */
+#define STREAM_HALT_FAULTS  ((uint16_t)(CNC_PFAULT_SEQ_GAP | CNC_PFAULT_COMM_TIMEOUT))
+
 void cnc_session_init(void)
 {
     memset(&s, 0, sizeof(s));
@@ -71,6 +78,12 @@ static void reject(uint16_t reason, uint16_t latch)
  * drift or drop under load. Explicitly not an emergency stop - the local
  * PE2 path is the only thing that may do that, and it does not involve the
  * network at all (Docs/FIRMWARE-ARCHITECTURE.md §8).
+ *
+ * stepgen_stop() DISCARDS the queue: whatever was buffered and not yet
+ * played is gone. Every caller must therefore make sure the stream cannot
+ * simply carry on at last_block_seq + 1 afterwards, or the discarded blocks
+ * would vanish from the toolpath without anyone being told. The fault paths
+ * do that with STREAM_HALT_FAULTS; the explicit commands desync.
  */
 static void controlled_stop(void)
 {
@@ -152,6 +165,16 @@ static void handle_motion(const cnc_header_t *hdr, bool *out_accepted)
 
     if (!cnc_parse_motion(hdr, &blk)) {
         reject(CNC_REJECT_BAD_PARAM, CNC_PFAULT_BAD_PARAM);
+        return;
+    }
+
+    /* After a gap or a comm timeout the queue was discarded by the stop.
+     * Nothing may be queued again until the host has acknowledged that with
+     * CLEAR_FAULT - not even the block that "fills" the gap, because the
+     * blocks before it that were waiting in the queue are gone too. Checked
+     * before the sequence rules, so a retry cannot slip past it either. */
+    if ((s.proto_faults & STREAM_HALT_FAULTS) != 0u) {
+        reject(CNC_REJECT_WRONG_STATE, 0u);
         return;
     }
 
@@ -268,8 +291,10 @@ static void handle_control(const cnc_header_t *hdr, bool *out_accepted)
         break;
 
     case CNC_CTL_DISABLE_DRIVES:
-        stepgen_stop();
-        s.motion_active = false;
+        /* stepgen_stop() discards the queue, so the stream is desynced
+         * for the same reason as STOP. */
+        controlled_stop();
+        s.motion_synced = false;
         ok = true;
         break;
 
@@ -278,9 +303,13 @@ static void handle_control(const cnc_header_t *hdr, bool *out_accepted)
         break;
 
     case CNC_CTL_STOP:
-        /* Controlled stop. The queue is left intact so the host can resume
-         * without re-sending what it already handed over. */
+        /* Controlled stop: the timebase halts, EN stays asserted, and the
+         * queue is DISCARDED - stepgen_stop() flushes it. The stream is
+         * desynced, so the next block sets a new baseline rather than being
+         * taken as the continuation of blocks that no longer exist. The host
+         * re-plans from STATUS.pos_output (Docs/PROTOCOL.md §4.6). */
         controlled_stop();
+        s.motion_synced = false;
         ok = true;
         break;
 
@@ -292,15 +321,27 @@ static void handle_control(const cnc_header_t *hdr, bool *out_accepted)
         ok = true;
         break;
 
-    case CNC_CTL_CLEAR_FAULT:
+    case CNC_CTL_CLEAR_FAULT: {
         /* ADR-010: recovery is always explicit, and clearing a fault never
          * clears an E-stop. Clearing the protocol's own latched faults is
-         * part of the same explicit act. */
+         * part of the same explicit act.
+         *
+         * Accepted when there was something to clear on either side. After
+         * a gap or a comm timeout the engine is READY, not FAULT, and the
+         * protocol latch is the whole fault - refusing that clear as
+         * WRONG_STATE would tell the host it failed when it worked. */
+        stepgen_status_t es;
+        stepgen_get_status(&es);
         s.proto_faults = 0u;
         s.last_reject  = CNC_REJECT_NONE;
         s.motion_synced = false;
-        ok = stepgen_clear_fault();
+        if (es.state == STEPGEN_STATE_FAULT) {
+            ok = stepgen_clear_fault();
+        } else {
+            ok = (es.state != STEPGEN_STATE_EMERGENCY_STOP);
+        }
         break;
+    }
 
     case CNC_CTL_CLEAR_ESTOP:
         /* The engine refuses this while the physical input is still

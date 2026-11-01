@@ -89,6 +89,8 @@ REJECT = {0: "none", 1: "queue full", 2: "sequence gap", 3: "stale",
 
 PFAULT = {1: "SEQ_GAP", 2: "COMM_TIMEOUT", 4: "QUEUE_FULL", 8: "BAD_PARAM"}
 
+PF_STREAM_HALT = 0x0003    # SEQ_GAP | COMM_TIMEOUT: no motion until clear-fault
+
 SFLAG_SYNCED = 8
 SFLAG = {1: "drives", 2: "link", 4: "host", 8: "synced", 16: "moving",
          32: "inputs", 64: "outputs"}
@@ -564,6 +566,12 @@ def cmd_move(dev, args, out):
         out(show_status(st))
         out(f"refused: engine is {STATE.get(st['state'])}; "
             f"send 'enable' (and 'start') first")
+        return 1
+    if st["proto_faults"] & PF_STREAM_HALT:
+        out(show_status(st))
+        out(f"refused: {flags_str(st['proto_faults'] & PF_STREAM_HALT, PFAULT)} "
+            f"is latched and the queue was discarded; send 'clear-fault' "
+            f"and re-plan from pos (PROTOCOL.md §7.3)")
         return 1
     if st["state"] == ST_READY:
         out("note: engine is READY, not RUNNING - blocks will queue but "

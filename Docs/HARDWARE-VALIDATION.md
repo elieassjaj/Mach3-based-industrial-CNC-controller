@@ -505,7 +505,10 @@ also works.
 
 *Pass.* `proto_faults` shows `SEQ_GAP`, motion stops, `EN` stays asserted,
 and **no further motion is executed until `CONTROL:CLEAR_FAULT`** — sending
-the missing block afterwards must not clear it by itself.
+the missing block afterwards must not clear it by itself. A second
+`./c5p1.py move` is refused with the fault named; after `./c5p1.py
+clear-fault` (accepted, state stays `READY`, `EN` still asserted) and
+`./c5p1.py start`, a new move runs from a fresh `block_seq` baseline.
 
 ### HV-36 — Motion timing is unaffected by protocol traffic
 

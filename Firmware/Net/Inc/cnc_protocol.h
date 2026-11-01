@@ -67,7 +67,7 @@ typedef enum {
     CNC_OP_INFO       = 0x82
 } cnc_opcode_t;
 
-/** CONTROL commands. Docs/PROTOCOL.md §4.3. */
+/** CONTROL commands. Docs/PROTOCOL.md §4.6. */
 typedef enum {
     CNC_CTL_ENABLE_DRIVES  = 1,
     CNC_CTL_DISABLE_DRIVES = 2,

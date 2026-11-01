@@ -43,7 +43,7 @@ Read from `ExternalMovement.cpp` (`Send512Block()`) and `ncPODDriver.h`:
 | Host supplies a **sequence number**, device **echoes it** in status (`ncPODCommand.sequenceNumber` → `ncPODStatus.Q`) | §4 |
 | Device reports a **buffer-full condition** and the host retries the same block (`ACKBUFFERNOTREADY`) | §7 |
 | Status carries **input bitfield** (`inio`), **output bitfield** (`outio`), per-axis **position in steps** (`fullSteps*`), buffer occupancy (`NumBuffer`) | §6 |
-| Explicit **E-stop / finish-move / reset / pause / continue** commands exist as distinct opcodes | §4.3 |
+| Explicit **E-stop / finish-move / reset / pause / continue** commands exist as distinct opcodes | §4.6 |
 
 ### From `SDK/Galil PlugIn/` and `SDK/g100IO/` `[SDK-EVIDENCE]`
 
@@ -179,7 +179,7 @@ packet can never reach the motion queue" a property rather than a hope.
 |---|---|---|---|
 | `0x01` | `HELLO` | 0 bytes | §4.5 |
 | `0x02` | `MOTION` | 8 + 20·n | §5 |
-| `0x03` | `CONTROL` | 4 bytes | §4.3 |
+| `0x03` | `CONTROL` | 4 bytes | §4.6 |
 | `0x04` | `OUTPUTS` | 8 bytes | §9 |
 | `0x05` | `STATUS_REQ` | 0 bytes | §6 |
 
@@ -239,6 +239,38 @@ that its chosen `slice_us` converts exactly (§5.3) and that its feed rates
 are inside the device's ceiling. A plugin should call `HELLO` once at
 connect and refuse to run against an unexpected `proto_version`.
 
+### 4.6 `CONTROL`
+
+Payload, 4 bytes: `cmd` (`uint8`), `arg` (`uint8`, reserved, zero),
+2 reserved bytes. Every `CONTROL` is answered with `STATUS`. A command the
+engine refuses in its current state is answered with
+`last_reject_reason = WRONG_STATE`; that is not a protocol fault.
+
+| `cmd` | Name | Effect |
+|---|---|---|
+| 1 | `ENABLE_DRIVES` | `SAFE_IDLE` → `READY`, `EN` asserted |
+| 2 | `DISABLE_DRIVES` | Controlled stop; queue discarded; stream unsynced |
+| 3 | `START` | `READY` → `RUNNING`: the queue starts to play |
+| 4 | `STOP` | Controlled stop: `RUNNING` → `READY`, `EN` stays asserted, **queue discarded**, stream unsynced |
+| 5 | `ABORT` | Same as `STOP` |
+| 6 | `CLEAR_FAULT` | Clears `proto_faults`, and an engine `FAULT` (→ `SAFE_IDLE`); stream unsynced. Never clears an E-stop |
+| 7 | `CLEAR_ESTOP` | Clears `EMERGENCY_STOP`, refused while `PE2` is still asserted |
+| 8 | `FLUSH_MOTION` | Same as `STOP` |
+
+**Every controlled stop discards the queue.** `stepgen_stop()` stops the
+timebase and empties the segment queue; nothing that was buffered and not
+yet played survives. `STOP` is therefore not a pause that can be resumed:
+the host re-plans the rest of the program from `STATUS.pos_output` and
+streams it again. Mach3 decelerates for a feed hold on the host side, so
+the device needs no pause of its own. Because the stream is unsynced, the
+next `MOTION` block sets a new baseline whatever its `block_seq` (§5.2), and
+a block from before the stop can never be taken for its continuation.
+
+`CLEAR_FAULT` is accepted whenever there was something to clear: after a
+sequence gap or a comm timeout the engine is still `READY` and the
+protocol's latch is the whole fault (§7.3). It is refused only in an
+emergency stop, which it never clears.
+
 ---
 
 ## 5. `MOTION` — the motion stream
@@ -290,8 +322,9 @@ alongside the message sequence).
 | greater than last + 1 | **GAP — a motion block was lost.** Reject the block, latch `PROTO_FAULT_SEQ_GAP`, stop motion (§7.3). **Never skip forward** |
 
 A block is also refused with `WRONG_STATE`, before any of the above is
-acted on, if the engine is not in `READY` or `RUNNING` — the only states in
-which it accepts segments. A host that streams motion before sending
+acted on, while `SEQ_GAP` or `COMM_TIMEOUT` is latched (§7.3, §7.4), or if
+the engine is not in `READY` or `RUNNING` — the only states in which it
+accepts segments. A host that streams motion before sending
 `CONTROL:ENABLE_DRIVES` gets a clean refusal rather than a block that is
 half-enqueued and then fails partway through.
 
@@ -302,8 +335,10 @@ explicitly, which is ADR-010's rule ("recovery is never automatic") applied
 to the command stream.
 
 Synchronisation is established, not assumed. After boot, and after any
-`FLUSH`, `ABORT` or fault clear, the device is *unsynced*: the next
-`MOTION` block it accepts sets the baseline, whatever its `block_seq`.
+`STOP`, `DISABLE_DRIVES`, `FLUSH`, `ABORT` or fault clear, the device is
+*unsynced*: the next `MOTION` block it accepts sets the baseline, whatever
+its `block_seq`. Each of those discards the queue (§4.6), so the blocks
+before it no longer exist and nothing can continue from them.
 From then on the rules above apply. This keeps the gap check strict during
 a program without requiring the two ends to agree on a starting number.
 
@@ -466,7 +501,8 @@ absent rather than publishing zeroes as if they were readings.
 ### 6.4 `last_reject_reason`
 
 `0` none, `1` queue full, `2` sequence gap, `3` stale/duplicate,
-`4` bad parameter, `5` not implemented, `6` wrong state,
+`4` bad parameter, `5` not implemented, `6` wrong state (engine state, or
+motion refused while `SEQ_GAP`/`COMM_TIMEOUT` is latched),
 `7` rate above the 2 MHz ceiling, `8` slice does not convert exactly.
 
 ---
@@ -496,21 +532,29 @@ the host was told it was refused and why.
 
 ### 7.3 Motion stops on a gap, and recovery is explicit
 
-On `SEQ_GAP` the device: refuses the block, latches the fault, performs a
-**controlled stop** (`stepgen_stop()` — timebase halts, `EN` stays
-asserted), and leaves the queue intact for inspection. It does **not**
+On `SEQ_GAP` the device: refuses the block, latches the fault, and
+performs a **controlled stop** (`stepgen_stop()` — timebase halts, `EN`
+stays asserted, the queue is **discarded**). It does **not**
 emergency-stop, and it does **not** disable the drives — per ADR-010, a
 command-stream problem holds position with the drives live so no axis
 drifts or drops under load.
 
-Clearing requires `CONTROL:CLEAR_FAULT`, then re-syncing the stream. No
-condition clears it automatically, including the host simply resuming.
+While the fault is latched, **every** `MOTION` block is refused with
+`WRONG_STATE` and nothing is queued — including the missing block itself
+and retries of earlier ones. Accepting the missing block would not repair
+the toolpath: the blocks that were waiting in the queue were discarded by
+the stop, so the stream would continue with those missing instead.
+
+Clearing requires `CONTROL:CLEAR_FAULT`, then re-syncing the stream from
+`pos_output`. No condition clears it automatically, including the host
+simply resuming.
 
 ### 7.4 Communication timeout
 
 If no valid host packet arrives for `comm_timeout_ms` (**200 ms**) *while
 motion is active*, the device latches `COMM_TIMEOUT` and performs the same
-controlled stop as §7.3.
+controlled stop as §7.3, with the same consequence: the queue is discarded
+and motion is refused until `CONTROL:CLEAR_FAULT`.
 
 **Why 200 ms** `[PROJECT-DECISION]`: the host cadence is 50 Hz (20 ms), so
 200 ms is ten missed cycles — long enough to ride out ordinary Windows
@@ -533,14 +577,14 @@ the physical input is still asserted.
 
 | Case | Detected by | Response |
 |---|---|---|
-| Lost motion block | `block_seq` gap | Reject, latch `SEQ_GAP`, controlled stop |
+| Lost motion block | `block_seq` gap | Reject, latch `SEQ_GAP`, controlled stop; no motion until `CLEAR_FAULT` |
 | Lost non-motion packet | not treated as an error | none needed |
 | Duplicate motion block | `block_seq` equal | Ignore content, reply status |
 | Duplicate other packet | `seq` ≤ `last_seq_seen` | Do not act, reply status |
 | Out-of-order / stale | `seq` or `block_seq` older | Do not act, reply status |
 | Corrupt packet | magic / version / length / CRC | Drop, count in `rx_dropped`, **no reply** |
 | Burst faster than consumption | `queue_free` | Refuse whole block, `QUEUE_FULL` |
-| Host stops talking | `comm_timeout_ms` | Latch `COMM_TIMEOUT`, controlled stop |
+| Host stops talking | `comm_timeout_ms` | Latch `COMM_TIMEOUT`, controlled stop; no motion until `CLEAR_FAULT` |
 | Host sends nonsense values | payload validation | Reject, `BAD_PARAM`/`RATE_TOO_HIGH`/`SLICE_NOT_EXACT` |
 
 Corrupt packets get no reply on purpose: if the CRC failed, the `seq` in

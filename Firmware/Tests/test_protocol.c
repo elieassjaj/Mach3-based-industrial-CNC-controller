@@ -506,10 +506,15 @@ static void test_block_seq_gap_stops_motion(void)
     TDONE();
 
     TCASE("the gap fault does not clear by itself when the host resumes");
-    /* Sending the block that was expected must not paper over the loss. */
+    /* Sending the block that was expected must not paper over the loss -
+     * and must not be QUEUED either: the stop discarded what was waiting
+     * ahead of it, so accepting it would cut the wrong shape after all. */
     rl = send_motion(2, &r, 1, 0, 700);
     CHECK(reply_status(rl, &st));
     CHECK((st.proto_faults & CNC_PFAULT_SEQ_GAP) != 0);
+    CHECK_EQI(st.last_reject_reason, CNC_REJECT_WRONG_STATE);
+    CHECK_EQI(st.last_block_seq, 1);
+    CHECK_EQI(st.queue_free, MOTION_SEGMENT_QUEUE_DEPTH);
     TDONE();
 
     TCASE("an explicit clear releases it, and the stream re-syncs");
@@ -517,6 +522,12 @@ static void test_block_seq_gap_stops_motion(void)
     CHECK(reply_status(rl, &st));
     CHECK_EQI(st.proto_faults, 0);
     CHECK((st.flags & CNC_SFLAG_MOTION_SYNCED) == 0);
+    /* The clear WORKED, so it must be reported as accepted. The engine is
+     * READY, not FAULT - the protocol latch was the whole fault - and it
+     * stays READY with the drives live (ADR-010). */
+    CHECK_EQI(st.last_reject_reason, CNC_REJECT_NONE);
+    CHECK_EQI(st.state, STEPGEN_STATE_READY);
+    CHECK((st.flags & CNC_SFLAG_DRIVES_ENABLED) != 0);
 
     /* Unsynced: the next block establishes a new baseline whatever its
      * number, so the two ends need not agree on where to restart. */
@@ -744,6 +755,116 @@ static void test_control_commands(void)
     CHECK(reply_status(rl, &st));
     /* A generic fault clear must never clear an E-stop - they are
      * structurally distinct states (ADR-010). */
+    CHECK_EQI(st.state, STEPGEN_STATE_EMERGENCY_STOP);
+    TDONE();
+}
+
+/* ------------------------------------------------------------------ */
+/* Every controlled stop discards the queue (Docs/PROTOCOL.md §4.6)    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * stepgen_stop() flushes the segment queue. Each path that reaches it must
+ * leave the stream in a state where the discarded blocks cannot silently
+ * disappear from the toolpath: either desynced (an explicit host command,
+ * so the host knows) or latched until CLEAR_FAULT (a fault, so it may not).
+ */
+static void test_stop_discards_and_never_resumes_silently(void)
+{
+    cnc_status_t st;
+    cnc_motion_record_t four[4];
+    for (uint32_t i = 0; i < 4u; i++) { four[i] = rec_axis(0, 10); }
+    const cnc_motion_record_t one = rec_axis(0, 10);
+
+    TCASE("STOP discards the queue and desyncs the stream");
+    engine_reset();
+    CHECK(stepgen_enable_drives());
+    size_t rl = send_motion(1, four, 4, 0, 100);
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.queue_free, MOTION_SEGMENT_QUEUE_DEPTH - 4u);
+    rl = send_control(CNC_CTL_STOP, 101);
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.last_reject_reason, CNC_REJECT_NONE);
+    CHECK_EQI(st.queue_free, MOTION_SEGMENT_QUEUE_DEPTH);
+    CHECK((st.flags & CNC_SFLAG_MOTION_SYNCED) == 0);
+    CHECK((st.flags & CNC_SFLAG_DRIVES_ENABLED) != 0);
+    TDONE();
+
+    TCASE("after STOP the next block is a new baseline, not block 2");
+    rl = send_motion(50, &one, 1, 0, 102);
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.last_reject_reason, CNC_REJECT_NONE);
+    CHECK_EQI(st.last_block_seq, 50);
+    CHECK((st.flags & CNC_SFLAG_MOTION_SYNCED) != 0);
+    TDONE();
+
+    TCASE("DISABLE_DRIVES discards the queue and desyncs too");
+    engine_reset();
+    CHECK(stepgen_enable_drives());
+    (void)send_motion(1, four, 4, 0, 200);
+    rl = send_control(CNC_CTL_DISABLE_DRIVES, 201);
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.queue_free, MOTION_SEGMENT_QUEUE_DEPTH);
+    CHECK((st.flags & CNC_SFLAG_MOTION_SYNCED) == 0);
+    TDONE();
+
+    TCASE("after a gap, no block plays until CLEAR_FAULT - not even a retry");
+    engine_reset();
+    CHECK(stepgen_enable_drives());
+    (void)send_motion(1, four, 4, 0, 300);
+    rl = send_motion(3, &one, 1, 0, 301);              /* block 2 lost */
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.last_reject_reason, CNC_REJECT_SEQ_GAP);
+    CHECK_EQI(st.queue_free, MOTION_SEGMENT_QUEUE_DEPTH);   /* discarded */
+    /* The duplicate of block 1, the missing block 2 and block 3 again:
+     * none of them may reach the queue. */
+    const uint32_t tries[3] = { 1u, 2u, 3u };
+    for (uint32_t i = 0; i < 3u; i++) {
+        rl = send_motion(tries[i], &one, 1, 0, 302u + i);
+        CHECK(reply_status(rl, &st));
+        CHECK_EQI(st.last_reject_reason, CNC_REJECT_WRONG_STATE);
+        CHECK_EQI(st.queue_free, MOTION_SEGMENT_QUEUE_DEPTH);
+    }
+    /* And START does not make anything move: there is nothing to play. */
+    rl = send_control(CNC_CTL_START, 310);
+    sim_trace_reset(&g_sim_trace);
+    sim_port_run_ticks(4u * SLICE_TICKS + TRACE_TAIL);
+    CHECK_EQI(pulses(0), 0);
+    (void)send_control(CNC_CTL_STOP, 311);
+    TDONE();
+
+    TCASE("a comm timeout also blocks motion until CLEAR_FAULT");
+    engine_reset();
+    CHECK(stepgen_enable_drives());
+    (void)send_motion(1, &one, 1, 0, 1000);
+    CHECK(stepgen_start());
+    size_t n = cnc_session_tick(1000 + CNC_COMM_TIMEOUT_MS, rx, sizeof(rx));
+    CHECK(reply_status(n, &st));
+    CHECK((st.proto_faults & CNC_PFAULT_COMM_TIMEOUT) != 0);
+    rl = send_motion(2, &one, 1, 0, 1300);             /* host is back */
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.last_reject_reason, CNC_REJECT_WRONG_STATE);
+    CHECK_EQI(st.queue_free, MOTION_SEGMENT_QUEUE_DEPTH);
+    TDONE();
+
+    TCASE("CLEAR_FAULT after a timeout is accepted and the stream restarts");
+    rl = send_control(CNC_CTL_CLEAR_FAULT, 1400);
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.last_reject_reason, CNC_REJECT_NONE);
+    CHECK_EQI(st.proto_faults, 0);
+    CHECK_EQI(st.state, STEPGEN_STATE_READY);
+    rl = send_motion(7, &one, 1, 0, 1401);
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.last_reject_reason, CNC_REJECT_NONE);
+    CHECK_EQI(st.last_block_seq, 7);
+    TDONE();
+
+    TCASE("CLEAR_FAULT is still refused, and changes nothing, in an E-stop");
+    engine_reset();
+    stepgen_emergency_stop();
+    rl = send_control(CNC_CTL_CLEAR_FAULT, 1500);
+    CHECK(reply_status(rl, &st));
+    CHECK_EQI(st.last_reject_reason, CNC_REJECT_WRONG_STATE);
     CHECK_EQI(st.state, STEPGEN_STATE_EMERGENCY_STOP);
     TDONE();
 }
@@ -1143,6 +1264,7 @@ int main(void)
     test_slice_must_convert_exactly();
     test_rate_ceiling_is_refused_not_clamped();
     test_control_commands();
+    test_stop_discards_and_never_resumes_silently();
     test_comm_timeout();
     test_status_stream();
     test_status_roundtrip();

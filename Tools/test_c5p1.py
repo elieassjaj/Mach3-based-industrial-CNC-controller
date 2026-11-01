@@ -274,14 +274,19 @@ class FakeDevice:
         elif cmd == 3 and self.state == 2:
             self.state, ok = 3, True
         elif cmd in (2, 4, 5, 8):
+            # Every controlled stop discards the queue and desyncs
+            # (PROTOCOL.md §4.6).
             if self.state == 3:
                 self.state = 2
             self.queue = 0
-            if cmd in (5, 8):
-                self.synced = False
+            self.synced = False
             ok = True
-        elif cmd == 6 and self.state == 4:
-            self.state, self.drives, self.synced, ok = 1, False, False, True
+        elif cmd == 6:
+            self.pfaults = 0
+            self.synced = False
+            if self.state == 4:
+                self.state, self.drives = 1, False
+            ok = self.state != 5
         if ok:
             self.reject = 0
         else:
@@ -290,6 +295,9 @@ class FakeDevice:
 
     def _motion(self, p):
         block, slice_us, count, flags = struct.unpack_from("<IHBB", p)
+        if self.pfaults & 0x3:           # SEQ_GAP | COMM_TIMEOUT latched
+            self._rej(6)
+            return False
         if self.synced and block == self.last_block:
             self.reject = c5p1.REJ_STALE
             return False
@@ -475,6 +483,34 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertTrue(any("sequence gap" in line for line in out), out)
         self.assertEqual(self.fake.pfaults & 1, 1)
+
+    def test_after_a_gap_move_needs_clear_fault(self):
+        self.run_cli("enable")
+        self.run_cli("start")
+        self.run_cli("move", "--axis", "X", "--steps", "1000",
+                     "--seconds", "1", "--gap-after", "1")
+        rc, out = self.run_cli("move", "--axis", "X", "--steps", "10",
+                               "--seconds", "0.1")
+        self.assertEqual(rc, 1)
+        self.assertTrue(any("clear-fault" in line for line in out), out)
+        rc, out = self.run_cli("clear-fault")
+        self.assertEqual(rc, 0, out)
+        rc, out = self.run_cli("move", "--axis", "X", "--steps", "10",
+                               "--seconds", "0.1")
+        self.assertEqual(rc, 0, out)
+
+    def test_move_after_stop_starts_a_new_baseline(self):
+        self.run_cli("enable")
+        self.run_cli("start")
+        self.run_cli("move", "--axis", "X", "--steps", "100",
+                     "--seconds", "0.2")
+        self.assertEqual(self.run_cli("stop")[0], 0)
+        self.assertFalse(self.fake.synced)
+        self.run_cli("start")
+        rc, out = self.run_cli("move", "--axis", "X", "--steps", "100",
+                               "--seconds", "0.2")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.fake.pfaults & 1, 0)
 
     def test_move_refuses_before_enable(self):
         rc, out = self.run_cli("move", "--axis", "X", "--steps", "10")
