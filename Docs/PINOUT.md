@@ -35,9 +35,12 @@ All five STEP pins are on the **same GPIO port (GPIOA)**, in sequential order, s
 ## EN pin (GPIOD)
 
 * **EN_PIN:** `PD15` (`GPIO_PIN_15`) — drive enable for the axis drivers.
-* **Polarity: ACTIVE HIGH.** `HIGH` = drivers enabled, `LOW` = drivers disabled.
-* Consequence for start-up safety: the reset/initial state of `PD15` must be `LOW`, so the drivers stay disabled until the firmware has completed initialization and reached a known-safe state (`Docs/FIRMWARE-ARCHITECTURE.md` §32). The generated `MX_GPIO_Init()` already drives `PD15` LOW before configuring it as an output, which satisfies this.
-* The same applies to any fault or emergency-stop response: de-asserting (`LOW`) disables the drivers.
+* **Polarity: ACTIVE HIGH by default** — `HIGH` = drivers enabled, `LOW` = drivers disabled.
+  **Configurable:** `CNC_EN_ACTIVE_HIGH` in `Firmware/Core/Inc/cnc_motion_config.h` (`1` active high, `0` active low). Every firmware write to `PD15` goes through it: the boot level, enable, disable and emergency stop. **Open for the prototype:** every common StepStick driver (A4988, DRV8825, TMC220x) is active low, and the owner will settle the polarity on the bench (`Docs/PROTOTYPE-BOARD.md` §3.1).
+* Consequence for start-up safety: while the MCU is in reset and until the firmware takes over, `PD15` must sit at the **disabled** level, so the drivers stay off until the firmware has reached a known-safe state (`Docs/FIRMWARE-ARCHITECTURE.md` §32). Two things outside the firmware must therefore match `CNC_EN_ACTIVE_HIGH`:
+  * **the pull resistor on the EN net:** a pull-down for active high, a pull-up for active low (the prototype has `R9` = 10 kΩ pull-up);
+  * **the initial output level of `PD15` in CubeMX.** `MX_GPIO_Init()` applies it about two seconds before the motion engine takes over. It is `Low` today, which is correct for active high only. HV-06 reports a mismatch on the first boot.
+* The same applies to any fault or emergency-stop response: the firmware drives `PD15` to the disabled level for the configured polarity.
 
 ---
 
@@ -103,7 +106,10 @@ The following Ethernet signals use fixed hardware routing between the STM32F407V
 
 * **RMII reference clock — verified against `LAN8720A/LAN8720-ETH-Board-Schematic.pdf`:** the PHY board carries its own **50 MHz oscillator**, whose output feeds both the LAN8720A's `XTAL1/CLKIN` input and the module header pin that connects to the MCU's `PA1`. The MCU therefore **receives** the 50 MHz RMII reference clock and must **not** generate it. No `MCO`/`MCO2` output is required or configured, and `PA1` is an input. Any example code that configures MCO to drive the PHY (including the ST STM3210C-EVAL demo shipped as the LAN8720A example) does **not** apply to this hardware.
 
-* **PHY reset:** the module's `nRST` line has a 4.7 kΩ pull-up on the PHY board and is brought out to the header; it is driven by `PB0` (`PHY_NRST`) on the MCU. `nRST` is **active low**, so the firmware must drive `PB0` HIGH to release the PHY from reset before any MDIO access or Ethernet initialization.
+* **PHY reset:** `PHY_NRST` = `PB0`, driving the PHY's `nRST`, which is **active low**. The firmware must drive `PB0` HIGH to release the PHY from reset before any MDIO access or Ethernet initialization.
+  * **Final PCB:** the LAN8720A is on the board and its `nRST` is wired to `PB0`. The LAN8720A datasheet requires `nRST` to stay asserted for at least 25 ms after the supplies reach 80 % (`tpurstd`, Table 5-9). See `Docs/PROTOTYPE-BOARD.md` §7 for the pull-down and the firmware release timing this implies.
+  * **Prototype (Waveshare LAN8720 module):** `nRST` is **not** brought out to the module's 2×7 header; header pin 13 is unconnected. On the module, `nRST` joins only a 4.7 kΩ pull-up and a 100 nF capacitor to GND. That RC resets the PHY by itself, releasing about 0.4 ms after power-up. `PB0` reaches nothing on that board. See `Docs/PROTOTYPE-BOARD.md` §5.
+  * An earlier revision of this line said the module brings `nRST` out to its header. The module's own schematic and netlist show it does not.
 
 * **PHY SMI (MDIO) address:** the LAN8720A's address is hardware-strapped by the `RXER/PHYAD0` pin to either 0 or 1 (datasheet §3.7.1, strap default `0b`). The vendor-supplied example for this module uses address `1`. Because the two sources disagree, the firmware should not hard-code an address — it should scan the SMI address range and detect the PHY, which is also what ST's PHY driver does.
 

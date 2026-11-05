@@ -59,6 +59,26 @@ void stepgen_emergency_stop(void);
  */
 bool stepgen_clear_fault(void);
 
+/**
+ * Physical E-STOP release interlock.
+ *
+ * The engine owns the STEP/DIR pins, not the input pins, so it cannot see
+ * PE2. ADR-010 nonetheless requires that EMERGENCY_STOP only ever clear
+ * once the physical input has actually been released, so the safety
+ * subsystem (M3) hands the engine that question as a predicate and
+ * safety_input_init() registers it. Returning false blocks the clear.
+ *
+ * With no gate registered there is no physical interlock and a clear
+ * succeeds on the state machine alone - which is the host test suite's
+ * configuration, and is why the on-target self-test HV-40 checks that a
+ * gate really is registered on a real board.
+ */
+typedef bool (*stepgen_estop_gate_t)(void);
+void stepgen_set_estop_gate(stepgen_estop_gate_t gate);
+
+/** True if an E-STOP gate is registered. Used by the on-target self-test. */
+bool stepgen_has_estop_gate(void);
+
 /** Explicit E-STOP reset. Only legal once the physical input has released. */
 bool stepgen_clear_emergency_stop(void);
 

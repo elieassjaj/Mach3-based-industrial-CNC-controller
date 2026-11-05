@@ -19,6 +19,20 @@
  * That is the structural half of the Ethernet-isolation requirement; the
  * NVIC priority table in stepgen_hw_map.h is the other half.
  * ---------------------------------------------------------------------- */
+/* On the target the section name is a property of THIS project - both
+ * STM32CubeIDE build configurations link STM32F407VGTX_FLASH.ld, which
+ * defines .stepgen_ram - so it defaults here rather than depending on
+ * somebody remembering to add a -D in the IDE's project properties.
+ * Forgetting it does not fail the build: the ring silently falls back into
+ * SRAM1 next to the Ethernet buffers and the ADR-012 bus isolation
+ * disappears, which only HV-03 would catch, and only at runtime.
+ *
+ * A command-line -D still wins (the Makefile passes one), and a host build
+ * defines nothing, so the unit tests place the ring normally. */
+#if !defined(STEPGEN_BUFFERS_SECTION) && defined(STM32F407xx)
+#  define STEPGEN_BUFFERS_SECTION ".stepgen_ram"
+#endif
+
 #if defined(STEPGEN_BUFFERS_SECTION)
 #  define STEPGEN_BUF_ATTR __attribute__((section(STEPGEN_BUFFERS_SECTION), aligned(32)))
 #else
@@ -30,6 +44,13 @@ static uint32_t g_step_buf[STEPGEN_RING_TICKS] STEPGEN_BUF_ATTR;
 static stepgen_core_t           g_core;
 static motion_segment_queue_t   g_queue;
 static volatile stepgen_state_t g_state = STEPGEN_STATE_UNINIT;
+
+/* Physical E-STOP release interlock, registered by the safety subsystem
+ * (M3). NULL means no interlock - see stepgen.h. Deliberately NOT cleared
+ * by stepgen_init(): the registration happens once at boot and must
+ * survive a re-init, because an interlock that can be dropped by a call
+ * into an unrelated module is not one. */
+static stepgen_estop_gate_t g_estop_gate;
 
 /* Underrun detection: set by the fill, cleared when the DMA enters a half. */
 static volatile uint8_t  g_half_ready[2];
@@ -264,9 +285,24 @@ bool stepgen_clear_fault(void)
     return true;
 }
 
+void stepgen_set_estop_gate(stepgen_estop_gate_t gate)
+{
+    g_estop_gate = gate;
+}
+
+bool stepgen_has_estop_gate(void)
+{
+    return g_estop_gate != NULL;
+}
+
 bool stepgen_clear_emergency_stop(void)
 {
     if (g_state != STEPGEN_STATE_EMERGENCY_STOP) {
+        return false;
+    }
+    /* ADR-010: never while the physical input still reads asserted. The
+     * engine cannot read PE2 itself; M3 registers the predicate that can. */
+    if (g_estop_gate != NULL && !g_estop_gate()) {
         return false;
     }
     g_state = STEPGEN_STATE_FAULT;      /* demote, then the normal clear */

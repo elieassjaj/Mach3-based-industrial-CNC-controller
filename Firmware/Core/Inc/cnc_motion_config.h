@@ -104,12 +104,41 @@
 #define EN_PIN                      15u       /* PD15 */
 #define EN_PIN_MASK_GPIOD           0x8000u
 
-/* PINOUT.md, verified by the project owner: EN is ACTIVE HIGH.
- * HIGH = drivers enabled. Reset state must be LOW.                         */
+/* Drive-enable polarity on PD15.
+ *
+ *   1  ACTIVE HIGH: PD15 HIGH = drives enabled.  Docs/PINOUT.md's default.
+ *   0  ACTIVE LOW:  PD15 LOW  = drives enabled.  Every common StepStick
+ *      driver works this way (A4988 ENABLE, DRV8825 nENBL, TMC220x ENN) -
+ *      see Docs/PROTOTYPE-BOARD.md section 3.1.
+ *
+ * OPEN for the prototype: the owner will settle it on the bench. Every
+ * write the firmware makes to PD15 goes through this one switch
+ * (stepgen_en_pin_level() in stepgen_port.h), so changing it here changes
+ * the boot level, the enable, the disable and the emergency stop together.
+ * It can also be set from the build: -DCNC_EN_ACTIVE_HIGH=0.
+ *
+ * TWO THINGS OUTSIDE THIS FILE MUST AGREE WITH IT. The firmware cannot
+ * set either of them:
+ *
+ *  1. The board's pull resistor on EN must hold the DISABLED level while
+ *     the MCU is in reset: a pull-up for active low, a pull-down for
+ *     active high. The prototype has R9 = 10k pull-up, which is right for
+ *     active low only.
+ *  2. The initial output level of PD15 in CubeMX (Pinout > PD15 > "GPIO
+ *     output level"). MX_GPIO_Init() applies it roughly two seconds before
+ *     stepgen_init() takes over, because MX_LWIP_Init() runs in between and
+ *     waits on the PHY. Today it is Low, which is right for active high
+ *     only. With 0 here and Low there, the drives are ENABLED for those two
+ *     seconds. HV-06 reports exactly that mismatch on the first boot.      */
+#ifndef CNC_EN_ACTIVE_HIGH
 #define CNC_EN_ACTIVE_HIGH          1
+#endif
+#if (CNC_EN_ACTIVE_HIGH != 0) && (CNC_EN_ACTIVE_HIGH != 1)
+#error "CNC_EN_ACTIVE_HIGH must be 0 (active low) or 1 (active high)"
+#endif
 
 /* ------------------------------------------------------- bring-up ------ */
-/* Run the on-target hardware self-tests (HV-00..HV-05) once at boot.
+/* Run the on-target hardware self-tests (HV-00..HV-06) once at boot.
  * Off by default; turn it on during hardware bring-up. Safe either way -
  * the drives stay disabled and the timebase is stopped between tests. */
 #ifndef CNC_RUN_SELFTEST_AT_BOOT

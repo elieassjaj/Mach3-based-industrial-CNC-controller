@@ -146,11 +146,47 @@ static void hv05_estop_latency(void)
 }
 
 /* ---------------------------------------------------------------------- */
+/* HV-06  EN polarity agrees with the board and with CubeMX.               */
+/* ---------------------------------------------------------------------- */
+/*
+ * Two failures, both of which leave the drives energised when the firmware
+ * believes they are off:
+ *
+ *   bit 0  PD15 was already an output at the ENABLED level when
+ *          stepgen_init() took over. MX_GPIO_Init() applies CubeMX's
+ *          initial level about two seconds earlier, so CNC_EN_ACTIVE_HIGH
+ *          and that level disagree (cnc_motion_config.h explains the fix).
+ *   bit 1  PD15 is not at the disabled level now, in SAFE_IDLE. This would
+ *          mean something other than the engine is driving the pin.
+ *
+ * `expected` carries CNC_EN_ACTIVE_HIGH, so the result records which
+ * polarity the build was tested with.
+ */
+static void hv06_en_polarity(void)
+{
+    uint32_t detail = 0u;
+
+    if (stepgen_port_en_enabled_at_boot()) {
+        detail |= 1u;
+    }
+
+    const bool pin_high = (STEPGEN_GPIO_EN->ODR & EN_PIN_MASK_GPIOD) != 0u;
+    if (stepgen_en_enabled_from_pin(pin_high, CNC_EN_ACTIVE_HIGH != 0)) {
+        detail |= 2u;
+    }
+
+    record(HV_06_EN_POLARITY, detail == 0u, detail,
+           (uint32_t)CNC_EN_ACTIVE_HIGH);
+}
+
+/* ---------------------------------------------------------------------- */
 
 bool stepgen_selftest_run_all(void)
 {
     memset(s_res, 0, sizeof(s_res));
 
+    /* First, before any test drives the pins: it reads the boot state. */
+    hv06_en_polarity();
     hv02_tick_frequency();
     hv01_bsrr_priority();
     hv03_sram2_placement();
