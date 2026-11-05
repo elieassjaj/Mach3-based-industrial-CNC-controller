@@ -35,7 +35,7 @@ The central architectural rule is:
 | Function | Configuration |
 |---|---|
 | MCU | STM32F407VGT6 |
-| CPU | ARM Cortex-M4 with FPU |
+| CPU | ARM Cortex-M4 with FPU + MAC |
 | Ethernet PHY | LAN8720A |
 | MCU Ethernet | Integrated STM32 Ethernet MAC |
 | MAC ↔ PHY | RMII |
