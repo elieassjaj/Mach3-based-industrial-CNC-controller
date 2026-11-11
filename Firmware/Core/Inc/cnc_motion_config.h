@@ -127,8 +127,9 @@
  *  2. The initial output level of PD15 in CubeMX (Pinout > PD15 > "GPIO
  *     output level"). MX_GPIO_Init() applies it roughly two seconds before
  *     stepgen_init() takes over, because MX_LWIP_Init() runs in between and
- *     waits on the PHY. Today it is Low, which is right for active high
- *     only. With 0 here and Low there, the drives are ENABLED for those two
+ *     waits on the PHY. It is now High (CNC5AX-ETH.ioc PD15.PinState and
+ *     gpio.c), which is right for active low only. A build with 1 here
+ *     must set it back to Low, or the drives are ENABLED for those two
  *     seconds. HV-06 reports exactly that mismatch on the first boot.      */
 #ifndef CNC_EN_ACTIVE_HIGH
 #define CNC_EN_ACTIVE_HIGH          1

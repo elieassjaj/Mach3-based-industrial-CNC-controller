@@ -39,7 +39,7 @@ All five STEP pins are on the **same GPIO port (GPIOA)**, in sequential order, s
   **Configurable:** `CNC_EN_ACTIVE_HIGH` in `Firmware/Core/Inc/cnc_motion_config.h` (`1` active high, `0` active low). Every firmware write to `PD15` goes through it: the boot level, enable, disable and emergency stop. **Open for the prototype:** every common StepStick driver (A4988, DRV8825, TMC220x) is active low, and the owner will settle the polarity on the bench (`Docs/PROTOTYPE-BOARD.md` §3.1).
 * Consequence for start-up safety: while the MCU is in reset and until the firmware takes over, `PD15` must sit at the **disabled** level, so the drivers stay off until the firmware has reached a known-safe state (`Docs/FIRMWARE-ARCHITECTURE.md` §32). Two things outside the firmware must therefore match `CNC_EN_ACTIVE_HIGH`:
   * **the pull resistor on the EN net:** a pull-down for active high, a pull-up for active low (the prototype has `R9` = 10 kΩ pull-up);
-  * **the initial output level of `PD15` in CubeMX.** `MX_GPIO_Init()` applies it about two seconds before the motion engine takes over. It is `Low` today, which is correct for active high only. HV-06 reports a mismatch on the first boot.
+  * **the initial output level of `PD15` in CubeMX.** `MX_GPIO_Init()` applies it about two seconds before the motion engine takes over. It is `High` now (`CNC5AX-ETH.ioc` `PD15.PinState=GPIO_PIN_SET`, `gpio.c`), which is correct for active low only; an active-high build must set it back to `Low`. HV-06 reports a mismatch on the first boot.
 * The same applies to any fault or emergency-stop response: the firmware drives `PD15` to the disabled level for the configured polarity.
 
 ---

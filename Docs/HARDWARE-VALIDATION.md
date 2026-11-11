@@ -150,7 +150,9 @@ makes to `PD15`, but not the level CubeMX's `MX_GPIO_Init()` applies about
 two seconds earlier. If the two disagree, the drives are energised through
 those two seconds of every boot, while the firmware believes they are off.
 Bit 0 is exactly that mismatch. Fix it with PD15's initial output level in
-CubeMX, not in code. Confirm the direction on a meter as well: with the
+CubeMX, not in code. The tree now sets it High, for `CNC_EN_ACTIVE_HIGH=0`;
+the bench confirmation (single-shot on `PD15` across power-up and across a
+debugger Reset: no LOW at any point) is recorded in §6 as HV-06b. Confirm the direction on a meter as well: with the
 drives connected, `SAFE_IDLE` must leave the motors free to turn by hand.
 
 ---
@@ -846,6 +848,7 @@ replaced by an expectation.
 | HV-17 Pause holds with EN live | NOT RUN | — | — | ADR-010 |
 | HV-18 E-STOP response | PARTIAL | EN cut only, at idle (see ESTOP-01) | 2026-11-11 | STEP-in-motion and loaded-link halves still open: ESTOP-02, ESTOP-03. **The one that matters** |
 | ESTOP-01 EN cut, latch, explicit clear | **PASS** | worst PE2↓→PD15 disable Δt₁ = **1.55 µs** over 10 trials (1.40 µs max of first 5, 1.55 µs max of last 5) | 2026-11-11 (as reported) | Bench, drivers/motors/relay absent, no motion. HEAD `97df451`, `CNC_EN_ACTIVE_HIGH=0`. Steps A–F all as expected. Not reported: per-trial values, scope photo, PE2 fall time. |
+| HV-06b PD15 stays disabled from reset | NOT RUN | — | — | `PD15.PinState=GPIO_PIN_SET` applied in `.ioc` and `gpio.c`; needs the power-up and Reset single-shots. **Gate for ESTOP-02** |
 | ESTOP-02 STEP cut in motion | NOT RUN | — | — | Debugger-driven stimulus, no Ethernet load |
 | ESTOP-03 STEP cut under Ethernet load | NOT RUN | — | — | Host-driven via `Tools/c5p1.py`; needs HV-30/HV-33 first |
 | HV-20 PHY reset pulse | NOT RUN | — | — | ADR-013; also test a warm MCU reset |
