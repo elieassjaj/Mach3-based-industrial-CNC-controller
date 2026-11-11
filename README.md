@@ -75,8 +75,8 @@ exactly. Four findings stop it working as drawn:
 - **PR-1:** the crystal is 16 MHz, but the firmware is configured for
   8 MHz. The PLL would run out of spec, so **do not flash the current
   firmware as it is**.
-- **PR-2:** the driver socket's `EN` is active low; the project's is
-  active high.
+- **PR-2:** the driver socket's `EN` is active low, and the firmware
+  default is now active low (`CNC_EN_ACTIVE_HIGH` = 0), so they agree.
 - **PR-3:** the driver socket's RESET and SLEEP pins float.
 - **PR-4:** the 250 ns STEP pulse is too short for a StepStick driver.
   `stepgen_configure_max_rate()` fixes it without a hardware change.
@@ -279,7 +279,7 @@ No phase may be reported as compliant with any requirement it has not measured o
 | Clock | 8 MHz HSE crystal → PLL (M=4, N=168, P=2) → 168 MHz SYSCLK; APB1 42 MHz (84 MHz timer clock), APB2 84 MHz (168 MHz timer clock); `FLASH_LATENCY_5`, voltage scale 1 |
 | Debug | SWD only (`PA13`/`PA14`); JTAG not used, which is what frees `PB4` for spindle PWM |
 | STEP | `PA8`–`PA12` = X, Y, Z, A, B — GPIO output push-pull, very-high speed, driven LOW at init |
-| DIR / enable | `PD8`–`PD12` (DIR X–B), `PD15` (`MOTOR_EN`) — GPIO output push-pull, very-high speed, driven LOW at init. `MOTOR_EN` is **active high**, so LOW at init means the drives are disabled until firmware enables them |
+| DIR / enable | `PD8`–`PD12` (DIR X–B), `PD15` (`MOTOR_EN`) — GPIO output push-pull, very-high speed, DIR driven LOW at init; `MOTOR_EN` driven **HIGH** at init. `MOTOR_EN` is **active low** (`CNC_EN_ACTIVE_HIGH` = 0), so HIGH at init means the drives are disabled until firmware enables them |
 | STEP base timer | TIM8, PSC = 0, ARR = 41 → 4.000 MHz update rate (250 ns tick); TIM8 global interrupt deliberately not enabled. (TIM2 per ADR-004, superseded by **ADR-012**: DMA1's peripheral port is not a bus-matrix master and cannot reach GPIO at all, and DMA2 takes timer requests only from TIM1/TIM8) |
 | STEP DMA | `DMA2_Stream1` / Channel 7 on the `TIM8_UP` request — memory-to-peripheral, 32-bit both sides, circular, very-high priority, peripheral increment disabled |
 | Spindle PWM | TIM3 CH1 on `PB4` (AF2), PSC = 83, ARR = 99 → 10.000 kHz, 0 % duty at init |
@@ -307,7 +307,7 @@ Listed so they are not mistaken for working functionality:
 - Watchdog, heap/stack sizes and LwIP memory sizing are still at CubeMX defaults. MAC and IP are no longer: both come from `Firmware/Net/Inc/net_config.h` as of Phase 2.
 - PHY SMI address is auto-scanned by the LAN8742 driver rather than assumed. On the prototype's Waveshare module the `PHYAD0` strap is tied high, so the address is **1** (`Docs/PROTOTYPE-BOARD.md` §5). The final PCB's strap is its own design choice, and the scan covers either.
 - **PHY reset timing on the final PCB:** ADR-013's pulse on `PB0` meets `trstia` (100 µs) but is released a few milliseconds into boot. The LAN8720A also requires `nRST` held until ≥ 25 ms after power-up (`tpurstd`). Needs a firmware change and an `nRST` pull-down before the final board (`Docs/PROTOTYPE-BOARD.md` §7). The prototype is unaffected, because the module resets itself.
-- **EN polarity is a build switch:** `CNC_EN_ACTIVE_HIGH` in `cnc_motion_config.h` (`1` active high, the default; `0` active low). It controls every write to `PD15`. It is open for the prototype, whose StepStick-style drivers are active low, and will be settled on the bench. The board's EN pull resistor and PD15's CubeMX initial level must match it; HV-06 checks the latter.
+- **EN polarity is a build switch:** `CNC_EN_ACTIVE_HIGH` in `cnc_motion_config.h` (`0` active low, the default, settled for the prototype's StepStick-style drivers; `1` active high). It controls every write to `PD15`. The board's EN pull resistor and PD15's CubeMX initial level (High) must match it; HV-06 checks the latter.
 - A CubeMX regeneration remains the main hazard to both subsystems: it silently reverted the static IP configuration once already (`Docs/PHASE2-STATUS.md` §2). Run the self-tests after every regeneration.
 
 ---

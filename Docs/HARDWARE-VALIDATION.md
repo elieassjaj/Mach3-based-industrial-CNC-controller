@@ -51,17 +51,18 @@ From `Docs/PINOUT.md` (post-ADR-005):
 |---|---|---|
 | STEP_X..STEP_B | PA8, PA9, PA10, PA11, PA12 | One GPIO port, one DMA stream, one BSRR word per tick |
 | DIR_X..DIR_B | PD8..PD12 | CPU-timed writes (ADR-006) |
-| EN | PD15 | Polarity is the build option `CNC_EN_ACTIVE_HIGH` (default 1 = HIGH enables). The bench build used for ESTOP-01 and later sets it to **0: active LOW, LOW (≈0 V) = drivers enabled, HIGH (≈3.3 V) = disabled**, matching the prototype's `R9` pull-up. Criteria written for a specific polarity say so. |
+| EN | PD15 | Polarity is the build option `CNC_EN_ACTIVE_HIGH` (default 0). The default, and the build used for ESTOP-01 and later, is **active LOW: LOW (≈0 V) = drivers enabled, HIGH (≈3.3 V) = disabled**; 1 would make HIGH enable, matching the prototype's `R9` pull-up. Criteria written for a specific polarity say so. |
 
 Because all five STEP pins are in one 32-bit word, a multi-axis tick is a
 single bus cycle — there is no cross-port skew to measure, which is one of
 ADR-005's stated benefits and is worth confirming rather than assuming
 (HV-11).
 
-**Before powering a machine:** `PD15` is active high, so LOW is safe. The
-firmware drives it LOW before configuring it as an output, and again on
-every integrity fault and emergency stop. Confirm the LOW-at-reset
-behaviour on the bench with the drives disconnected before trusting it.
+**Before powering a machine:** `PD15` is active low (default build), so HIGH
+is safe. The firmware drives it HIGH before configuring it as an output,
+and again on every integrity fault and emergency stop. Confirm the
+HIGH-at-reset behaviour on the bench (HV-06b) with the drives disconnected
+before trusting it.
 
 ---
 

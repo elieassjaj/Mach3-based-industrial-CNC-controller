@@ -106,12 +106,13 @@
 
 /* Drive-enable polarity on PD15.
  *
- *   1  ACTIVE HIGH: PD15 HIGH = drives enabled.  Docs/PINOUT.md's default.
- *   0  ACTIVE LOW:  PD15 LOW  = drives enabled.  Every common StepStick
- *      driver works this way (A4988 ENABLE, DRV8825 nENBL, TMC220x ENN) -
- *      see Docs/PROTOTYPE-BOARD.md section 3.1.
+ *   1  ACTIVE HIGH: PD15 HIGH = drives enabled.
+ *   0  ACTIVE LOW:  PD15 LOW (0 V) = drives enabled. The default. Every
+ *      common StepStick driver works this way (A4988 ENABLE, DRV8825 nENBL,
+ *      TMC220x ENN) - see Docs/PROTOTYPE-BOARD.md section 3.1 - and the
+ *      owner's drivers are active low.
  *
- * OPEN for the prototype: the owner will settle it on the bench. Every
+ * SETTLED by the owner for the prototype: active low. Every
  * write the firmware makes to PD15 goes through this one switch
  * (stepgen_en_pin_level() in stepgen_port.h), so changing it here changes
  * the boot level, the enable, the disable and the emergency stop together.
@@ -127,12 +128,12 @@
  *  2. The initial output level of PD15 in CubeMX (Pinout > PD15 > "GPIO
  *     output level"). MX_GPIO_Init() applies it roughly two seconds before
  *     stepgen_init() takes over, because MX_LWIP_Init() runs in between and
- *     waits on the PHY. It is now High (CNC5AX-ETH.ioc PD15.PinState and
+ *     waits on the PHY. It is High (CNC5AX-ETH.ioc PD15.PinState and
  *     gpio.c), which is right for active low only. A build with 1 here
  *     must set it back to Low, or the drives are ENABLED for those two
  *     seconds. HV-06 reports exactly that mismatch on the first boot.      */
 #ifndef CNC_EN_ACTIVE_HIGH
-#define CNC_EN_ACTIVE_HIGH          1
+#define CNC_EN_ACTIVE_HIGH          0
 #endif
 #if (CNC_EN_ACTIVE_HIGH != 0) && (CNC_EN_ACTIVE_HIGH != 1)
 #error "CNC_EN_ACTIVE_HIGH must be 0 (active low) or 1 (active high)"

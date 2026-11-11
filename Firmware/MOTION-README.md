@@ -167,7 +167,7 @@ arm-none-eabi-nm -S CNC5AX-ETH.elf | grep g_step_buf
 - Confirm the DIR sign convention per axis (`dir_invert`), which §25
   forbids assuming.
 - Confirm the EN polarity. `CNC_EN_ACTIVE_HIGH` in `cnc_motion_config.h`
-  (`1` active high, the default; `0` active low, as on every common
+  (`0` active low, the default; `1` active high; active low is the case on every common
   StepStick driver) controls every write to `PD15`. If you change it, also
   change the EN pull resistor on the board and PD15's initial output level
   in CubeMX. HV-06 reports a mismatch.
