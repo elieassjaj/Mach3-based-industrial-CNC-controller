@@ -51,7 +51,7 @@ From `Docs/PINOUT.md` (post-ADR-005):
 |---|---|---|
 | STEP_X..STEP_B | PA8, PA9, PA10, PA11, PA12 | One GPIO port, one DMA stream, one BSRR word per tick |
 | DIR_X..DIR_B | PD8..PD12 | CPU-timed writes (ADR-006) |
-| EN | PD15 | **Active HIGH**; HIGH = drivers enabled |
+| EN | PD15 | Polarity is the build option `CNC_EN_ACTIVE_HIGH` (default 1 = HIGH enables). The bench build used for ESTOP-01 and later sets it to **0: active LOW, LOW (≈0 V) = drivers enabled, HIGH (≈3.3 V) = disabled**, matching the prototype's `R9` pull-up. Criteria written for a specific polarity say so. |
 
 Because all five STEP pins are in one 32-bit word, a multi-axis tick is a
 single bus cycle — there is no cross-port skew to measure, which is one of
@@ -311,6 +311,106 @@ worst case; do not average.
 *Also check, in the same session:* the machine does **not** restart when
 the button is released (ADR-010: recovery is explicit), and a clear issued
 while the button is still down is refused (ADR-015 decision 4).
+
+HV-18 is closed in three bench steps, each recorded in §6:
+
+| Step | Covers |
+|---|---|
+| ESTOP-01 | EN cut, latch, refused clear, explicit clear. Idle, no motion. |
+| ESTOP-02 | Last STEP edge after the PE2 falling edge, with 1–5 axes at 2 MHz. Debugger-driven. |
+| ESTOP-03 | The same with the Ethernet link loaded and motion started by the host. |
+
+HV-18 itself stays PARTIAL until ESTOP-02 and ESTOP-03 pass and the worst
+case has been recorded over ≥ 100 presses.
+
+### ESTOP-01 — EN cut, latch, explicit clear (result: PASS, 2026-11-11)
+
+Bench: driver sockets empty, no motor, nothing on the relay. PE2 held low
+with a jumper to GND. Build `97df451` with `CNC_EN_ACTIVE_HIGH=0`, so the
+expected `PD15` levels are: `SAFE_IDLE` ≈ 3.3 V, `READY` ≈ 0 V,
+`EMERGENCY_STOP` ≈ 3.3 V.
+
+| Step | Observed (as reported) |
+|---|---|
+| A baseline | `SAFE_IDLE` |
+| B `stepgen_enable_drives()` | `true`, `READY`, RUN LED blinking, `PD15` ≈ 0 V |
+| C press, 10 trials | worst Δt₁ (PE2↓ → `PD15` to the disabled level) **1.55 µs** |
+| D clear with button down | `false`, stays `EMERGENCY_STOP` |
+| E release, wait | stays `EMERGENCY_STOP`, ERR LED on, EN not re-enabled |
+| F clear after release | `true`, `SAFE_IDLE`, EN still disabled |
+
+Reading the number. 1.55 µs is about 260 CPU cycles and 6 base ticks
+(250 ns). It is the whole chain: input synchroniser, NVIC entry, the call
+chain in `safety_estop_isr`, and the `PD15` write, which is the fourth
+register write in `stepgen_port_emergency_stop()`. HV-05's "42 cycles"
+times only the register writes, so the two figures are not in conflict.
+At 2 MHz per axis (500 ns period) 1.55 µs is up to three further STEP
+pulses per axis, which is why ESTOP-02 measures the STEP lines directly.
+
+Not reported for this run, to be added if available: the per-trial values,
+the scope capture of the worst trial, the PE2 fall time, and `g_state` /
+LED state at step C.
+
+### ESTOP-02 — STEP cut while moving
+
+*Polarity.* Written for `CNC_EN_ACTIVE_HIGH=0`: the disabled level on
+`PD15` is HIGH.
+
+*Preconditions.*
+1. Driver sockets empty, no motor, nothing on the relay.
+2. EN at boot: with `CNC_EN_ACTIVE_HIGH=0` and CubeMX resetting `PD15` LOW
+   in `MX_GPIO_Init()` (`Firmware/Core/Src/gpio.c:63`), the drives are
+   enabled from `MX_GPIO_Init()` until `stepgen_init()` takes over. Capture
+   `PD15` single-shot on power-up and read the HV-06 result. **Do not
+   connect a driver to this build until that is resolved.**
+
+*Method.* Logic analyser (≥ 100 MSa/s) on `PE2`, `PD15` and `PA8..PA12`
+(STEP X..B); trigger on the falling edge of `PE2`, 20 µs window, 20 %
+pre-trigger. With a two-channel scope instead, use `PE2` plus one STEP line
+and repeat with a different STEP line per axis. Per trial:
+
+1. Debugger Reset, Resume, wait for boot. `'stepgen.c'::g_state` = 1.
+2. Arm the analyser. In the Debugger Console run one stimulus, with a
+   window long enough to press the button inside it (30 s):
+   `call stepgen_stim_max_rate(1, 30)`, `(3, 30)`, `(5, 30)`, or
+   `call stepgen_stim_mixed_rates(30)`.
+3. Connect the PE2 jumper to GND while the STEP lines are running.
+4. Suspend and read `'stepgen.c'::g_state` (expect 5),
+   `'stepgen.c'::g_core.faults` and `'stepgen.c'::g_underruns` (both 0).
+   If the state is 4 or an underrun is counted, `EN` dropped for another
+   reason: discard the trial.
+5. Always Reset afterwards. The stimulus keeps retrying its submit loop
+   once the state is `EMERGENCY_STOP`, so the console call never returns;
+   do not Resume out of it.
+
+*Measure per trial.* From the PE2 50 % falling crossing: (a) to `PD15`
+reaching the disabled level; (b) to the last STEP rising edge on any axis;
+(c) to the last STEP falling edge (the forced low); (d) the width of the
+last pulse (a pulse cut short); (e) STEP rising edges after (a).
+
+*Trials.* ≥ 20 per stimulus, ≥ 30 for 5 axes. Record the worst case for
+each of (a)–(d), not the mean.
+
+*Proposed pass (the repo fixes no numeric bound for E-STOP latency, so
+these are proposals, to be confirmed or replaced):*
+- (e) = 0 in every trial. The code drops the timer and forces STEP low
+  before it writes `PD15`, so no STEP rising edge may follow the EN edge.
+- Worst (a) ≤ 2 µs for every stimulus, the bar ESTOP-01 used.
+- Worst (a) across 1, 3, 5 axes and mixed rates differs by ≤ 0.5 µs. This
+  is the "independent of how many axes are moving" claim.
+- Every trial ends in `EMERGENCY_STOP` with no fault bits.
+
+*Limits.* No Ethernet load. The debugger-called stimulus occupies the main
+loop, so it does not exercise lwIP. The link-loaded half is ESTOP-03.
+
+### ESTOP-03 — STEP cut under Ethernet load (outline)
+
+Needs HV-25, HV-30 and HV-33 passed first. Start 5-axis motion from the
+host with `Tools/c5p1.py` (`enable`, `start`, `move`), flood the link at
+the same time (`ping -f` or a C5P1 `watch` plus line-rate traffic), and
+repeat ESTOP-02's measurements. The pass criterion is the same worst-case
+bounds, with the loaded and unloaded worst cases within 0.5 µs of each
+other. The procedure is written after ESTOP-02 results exist.
 
 ---
 
@@ -744,7 +844,10 @@ replaced by an expectation.
 | HV-15 Ethernet isolation | NOT RUN | — | — | Phase 2 code now exists; needs the board |
 | HV-16 Underrun safety | NOT RUN | — | — | |
 | HV-17 Pause holds with EN live | NOT RUN | — | — | ADR-010 |
-| HV-18 E-STOP response | NOT RUN | — | — | Runnable since Phase 4; **the one that matters** |
+| HV-18 E-STOP response | PARTIAL | EN cut only, at idle (see ESTOP-01) | 2026-11-11 | STEP-in-motion and loaded-link halves still open: ESTOP-02, ESTOP-03. **The one that matters** |
+| ESTOP-01 EN cut, latch, explicit clear | **PASS** | worst PE2↓→PD15 disable Δt₁ = **1.55 µs** over 10 trials (1.40 µs max of first 5, 1.55 µs max of last 5) | 2026-11-11 (as reported) | Bench, drivers/motors/relay absent, no motion. HEAD `97df451`, `CNC_EN_ACTIVE_HIGH=0`. Steps A–F all as expected. Not reported: per-trial values, scope photo, PE2 fall time. |
+| ESTOP-02 STEP cut in motion | NOT RUN | — | — | Debugger-driven stimulus, no Ethernet load |
+| ESTOP-03 STEP cut under Ethernet load | NOT RUN | — | — | Host-driven via `Tools/c5p1.py`; needs HV-30/HV-33 first |
 | HV-20 PHY reset pulse | NOT RUN | — | — | ADR-013; also test a warm MCU reset |
 | HV-21 Buffers in SRAM1 | **PASS (static)** | `0x20000438`, `0x200004D8`, `0x20000580` | 2026-09-17 | Confirmed in the linked map; re-confirm at runtime on target |
 | HV-22 ETH IRQ priority | NOT RUN | — | — | ADR-012; expect 5, 5, 2 |
