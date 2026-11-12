@@ -841,7 +841,7 @@ replaced by an expectation.
 | HV-01 BSRR priority | NOT RUN | — | — | |
 | HV-02 Tick frequency | NOT RUN | — | — | |
 | HV-03 SRAM2 placement | **PASS (static)** | `0x2001C000`–`0x2001D000` | 2026-09-16 | Confirmed in the linked map; re-confirm at runtime on target |
-| HV-04 Refill cost | NOT RUN | — | — | RISK-1; estimate ~60% duty |
+| HV-04 Refill cost | **FAIL** (provisional, Debug builds only) | `fill_cycles_max` **17 555** cycles (81.6 % of 21 504) at -Og, 5 axes at 2 MHz, 60 s; **21 029** (97.8 %) at -O0, 30 s | 2026-11-12 (as reported) | Criterion is ≤ 10 752 (50 %). Read with `print 'stepgen.c'::g_fill_cycles_max` after a debugger `call stepgen_stim_max_rate(5, N)`. No underrun while the stimulus was being fed. Not yet measured at -O2/-Os; RISK-1 stays open. |
 | HV-05 E-STOP path | NOT RUN | — | — | |
 | HV-06 EN polarity | NOT RUN | — | — | `CNC_EN_ACTIVE_HIGH` vs board pull and CubeMX PD15 level |
 | HV-10 1 axis @ 2 MHz | NOT RUN | — | — | |
