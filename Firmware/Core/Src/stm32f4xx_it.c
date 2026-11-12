@@ -22,6 +22,7 @@
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "safety_port_stm32f4.h"
 #include "stepgen_port_stm32f4.h"
 /* USER CODE END Includes */
 
@@ -206,7 +207,18 @@ void SysTick_Handler(void)
 void EXTI0_IRQHandler(void)
 {
   /* USER CODE BEGIN EXTI0_IRQn 0 */
-
+  /* The EXTI vectors for PE0..PE14 are taken over completely, the same way
+   * the STEP-DMA vector below is. HAL_GPIO_EXTI_IRQHandler() tests one pin,
+   * clears it and dispatches through a weak callback - per line, on the
+   * shared vectors - and that indirection sits directly in front of the
+   * E-STOP path Docs/FIRMWARE-ARCHITECTURE.md §8 requires to be the fastest
+   * in the system. Nothing else in this project uses an EXTI line, so
+   * returning before the HAL call costs nothing.
+   * Each handler clears only its OWN pending bits: EXTI->PR is shared and
+   * write-1-to-clear, so a handler that clears more than it owns can
+   * discard an E-STOP that has not been serviced yet. */
+  safety_inputs_isr(SAFETY_PR_LINE0);
+  return;
   /* USER CODE END EXTI0_IRQn 0 */
   HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_0);
   /* USER CODE BEGIN EXTI0_IRQn 1 */
@@ -220,7 +232,8 @@ void EXTI0_IRQHandler(void)
 void EXTI1_IRQHandler(void)
 {
   /* USER CODE BEGIN EXTI1_IRQn 0 */
-
+  safety_inputs_isr(SAFETY_PR_LINE1);
+  return;
   /* USER CODE END EXTI1_IRQn 0 */
   HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_1);
   /* USER CODE BEGIN EXTI1_IRQn 1 */
@@ -234,7 +247,10 @@ void EXTI1_IRQHandler(void)
 void EXTI2_IRQHandler(void)
 {
   /* USER CODE BEGIN EXTI2_IRQn 0 */
-
+  /* E-STOP (PE2). NVIC priority 0, its own vector, no HAL in the path -
+   * see the note on EXTI0 above and ADR-004. */
+  safety_estop_isr();
+  return;
   /* USER CODE END EXTI2_IRQn 0 */
   HAL_GPIO_EXTI_IRQHandler(E_STOP_Pin);
   /* USER CODE BEGIN EXTI2_IRQn 1 */
@@ -248,7 +264,8 @@ void EXTI2_IRQHandler(void)
 void EXTI3_IRQHandler(void)
 {
   /* USER CODE BEGIN EXTI3_IRQn 0 */
-
+  safety_inputs_isr(SAFETY_PR_LINE3);
+  return;
   /* USER CODE END EXTI3_IRQn 0 */
   HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_3);
   /* USER CODE BEGIN EXTI3_IRQn 1 */
@@ -262,7 +279,8 @@ void EXTI3_IRQHandler(void)
 void EXTI4_IRQHandler(void)
 {
   /* USER CODE BEGIN EXTI4_IRQn 0 */
-
+  safety_inputs_isr(SAFETY_PR_LINE4);
+  return;
   /* USER CODE END EXTI4_IRQn 0 */
   HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_4);
   /* USER CODE BEGIN EXTI4_IRQn 1 */
@@ -276,7 +294,8 @@ void EXTI4_IRQHandler(void)
 void EXTI9_5_IRQHandler(void)
 {
   /* USER CODE BEGIN EXTI9_5_IRQn 0 */
-
+  safety_inputs_isr(SAFETY_PR_LINE9_5);
+  return;
   /* USER CODE END EXTI9_5_IRQn 0 */
   HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_5);
   HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_6);
@@ -294,7 +313,8 @@ void EXTI9_5_IRQHandler(void)
 void EXTI15_10_IRQHandler(void)
 {
   /* USER CODE BEGIN EXTI15_10_IRQn 0 */
-
+  safety_inputs_isr(SAFETY_PR_LINE15_10);
+  return;
   /* USER CODE END EXTI15_10_IRQn 0 */
   HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_10);
   HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_11);

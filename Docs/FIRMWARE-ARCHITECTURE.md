@@ -1837,6 +1837,52 @@ its zero-skew property (ADR-005), CPU-timed DIR with the two-stage
 arm/play mechanism and `g = 3` (ADR-006), direct mode with one transfer
 per request, circular with HT/TC interrupts, very-high stream priority,
 and the NVIC ordering (E-STOP 0, other inputs 1, STEP-DMA 2, Ethernet 5).
+Two consequences of this correction are elevated below from incidental
+facts into binding rules, since both are load-bearing for the "Ethernet
+must not affect STEP timing" requirement (`Docs/MOTION-ENGINE.md` §8) and
+neither survives a careless future edit (e.g. a CubeMX regeneration, or a
+new buffer declared without checking where it lands) without being stated
+explicitly:
+
+**Binding rule — Ethernet/`lwIP` buffers confined to SRAM1.** The STEP-DMA
+ring now lives in SRAM2 (`Platform/STM32F407/linker/stepgen_sram2.ld`), on
+its own bus-matrix slave port, precisely so Ethernet traffic can never
+contend with it for that port. That isolation only holds if the *other*
+side is also true: every Ethernet MAC DMA descriptor/buffer
+(`DMARxDscrTab`, `DMATxDscrTab`) and the entire `lwIP` buffer pool
+(zero-copy RX pbuf pool, TX path, `lwIP`'s own heap/pools) **must reside in
+SRAM1 only — never SRAM2, and never CCM RAM.** The CCM case is not a
+performance nuance but an outright functional impossibility: RM0090 §2.1
+states the 64 KB CCM data RAM "is not part of the bus matrix and can be
+accessed only through the CPU" — **no DMA master on this part, including
+the Ethernet MAC's own dedicated DMA engine, can reach CCM at all.**
+Verified against the current Phase 1 firmware: `DMARxDscrTab`,
+`DMATxDscrTab`, and the `lwIP` `RX_POOL` pool
+(`Firmware/LWIP/Target/ethernetif.c`) are plain static/global declarations
+with no section attribute, so they land in the linker's default `RAM`
+region, which `STM32F407VGTX_FLASH.ld` defines as exactly SRAM1
+(`ORIGIN = 0x20000000, LENGTH = 112K`) — SRAM2 and CCMRAM are separate,
+explicitly-carved-out regions that no Ethernet/`lwIP` code references
+anywhere in the repository today. The rule holds by construction, not
+merely by intent; see `Docs/PRE-IMPLEMENTATION-DECISIONS.md` item 10 for
+the recommended (not yet implemented) HV-03-style runtime check that would
+catch a future regression.
+
+**Binding rule — Ethernet interrupt priority strictly below `DMA2_Stream1`.**
+The isolation the NVIC ordering above is meant to provide only actually
+holds for the *current* STEP-DMA interrupt, `DMA2_Stream1_IRQn` — not the
+old, no-longer-used `DMA1_Stream1_IRQn` this ADR replaces. **`ETH_IRQn` and
+`ETH_WKUP_IRQn` must always be configured at a strictly lower NVIC
+preempt-priority (a numerically higher value) than `DMA2_Stream1_IRQn`,**
+so that Ethernet RX/TX servicing can never preempt a STEP-DMA
+refill/DIR-write in progress. Verified against the current Phase 1
+firmware: `Firmware/Core/Src/dma.c` sets
+`HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 2, 0)`, and
+`Firmware/CNC5AX-ETH.ioc` configures both `NVIC.ETH_IRQn` and
+`NVIC.ETH_WKUP_IRQn` at preempt-priority `5` (`5 > 2`) — the requirement
+already holds. See `Docs/PRE-IMPLEMENTATION-DECISIONS.md` item 11; any
+future change to either priority (including an unreviewed CubeMX
+regeneration) must preserve this ordering before being accepted.
 
 **What ADR-005's reasoning loses, and what it does not.** ADR-005's
 "frees `DMA1_Stream7` for a future DIR-DMA path" no longer applies, since
@@ -1884,6 +1930,460 @@ instances differ.
 **Validation result:** Documentation analysis complete and corroborated by
 CubeMX's own channel assignment; the integrated firmware builds and links.
 On-silicon confirmation NOT RUN — pending hardware (HV-00).
+
+---
+
+### ADR-013 — PHY Reset Pulse Width (`PB0`/`PHY_NRST`)
+
+**Decision:** `PB0` (`PHY_NRST`, active-low, per `Docs/PINOUT.md`) must be
+explicitly driven **LOW for at least 150 µs**, then released HIGH, at the
+start of the PHY reset sequence — before `low_level_init()`
+(`Firmware/LWIP/Target/ethernetif.c`) performs any MDIO access. This
+resolves `Docs/FIRMWARE-IMPLEMENTATION-PLAN.md` §4 item 8, the one item of
+the original eight left open pending a project-owner call
+(`Docs/PRE-IMPLEMENTATION-DECISIONS.md` item 8).
+
+**Reason:**
+- The current firmware only ever drives `PB0` HIGH (`MX_GPIO_Init()`) and
+  never actively pulses it LOW, per `Docs/ETHERNET.md` §2.2's own
+  power-on-timing note. The board has no RC delay or reset supervisor on
+  `nRST` — only a plain pull-up (per the schematic) — so a deterministic
+  reset today depends entirely on the LAN8720A's internal power-on reset
+  plus `LAN8742_Init()`'s MDIO soft-reset (`BCR` bit 15). That is
+  sufficient at cold power-up in practice, but is not a controlled,
+  firmware-owned reset on every reset path (e.g. a warm/software MCU
+  reset that does not re-power the PHY).
+- **Correction (prototype review, `Docs/PROTOTYPE-BOARD.md` §5).** Both
+  premises above describe the Waveshare module wrongly. Its `nRST` is
+  **not on its header**, and it has an RC network (4.7 kΩ + 100 nF), not a
+  plain pull-up. On the prototype this ADR's pulse therefore reaches
+  nothing. The decision still stands for the **final PCB**, where the
+  LAN8720A's `nRST` is wired to `PB0`, but one requirement was missed
+  there: this ADR sized the pulse against `trstia` (100 µs) only. The
+  datasheet also requires `nRST` to stay asserted until ≥ 25 ms after the
+  supplies reach 80 % (`tpurstd`, Table 5-9), and the current
+  implementation releases it a few milliseconds into boot. That must be
+  fixed before the final board runs, and the board should carry a
+  pull-down on `nRST` (`Docs/PROTOTYPE-BOARD.md` §7).
+- **150 µs is the project owner's confirmed value**, chosen with explicit
+  margin over the LAN8720A datasheet's general `trstia` reset-assertion
+  minimum (~100 µs) — the same figure `Docs/ETHERNET.md` §2.2 had already
+  flagged as a "small, contained firmware change, not an architectural
+  one." This ADR adopts the confirmed number; it does not change the
+  underlying mechanism §2.2 already proposed.
+
+**Implementation note — DONE (Phase 2).** `HAL_Delay()`'s 1 ms `SysTick`
+resolution cannot express a 150 µs pulse. This project already
+has a `DWT->CYCCNT`-based cycle-accurate busy-wait pattern
+(`Firmware/Platform/STM32F407/Src/stepgen_selftest_stm32f4.c`,
+`while ((DWT->CYCCNT - t0) < n) { __NOP(); }`), but its DWT enablement
+currently happens inside the stepgen port's own init, which runs later in
+`main()` than `MX_GPIO_Init()`/`MX_LWIP_Init()`. The first of the two
+options this ADR left open was taken: `net_port_delay_us()`
+(`Firmware/Platform/STM32F407/Src/net_port_stm32f4.c`) enables the DWT
+cycle counter itself if nothing else has, which is idempotent with respect
+to `stepgen_port_init()`'s later enablement and deliberately does not zero
+`CYCCNT` (that counter belongs to HV-04). The pulse itself is
+`net_port_phy_hw_reset()`, called from `low_level_init()`'s
+`USER CODE BEGIN MACADDRESS` block — that is, **before** `HAL_ETH_Init()`,
+not merely before the first MDIO access, so the MAC's DMA soft reset never
+runs against a PHY still held in reset.
+
+Two facts established from the repository's own sources while implementing
+it, neither of which changes the decision:
+
+- The datasheet minimum this ADR cites as "~100 µs" is exact:
+  `LAN8720A/LAN8720A_DataSheet-DS00002165.pdf` Table 5-9 gives
+  `trstia` = 100 µs min. 150 µs stands at 1.5×.
+- Datasheet §3.8.5.1 requires a clock on `XTAL1/CLKIN` *during* the reset.
+  `Docs/ETHERNET.md` §2.2 confirms against the schematic that the module's
+  own 50 MHz oscillator supplies both that pin and the MCU's `PA1` RMII
+  reference clock, independently of `nRST` — so asserting the reset stops
+  neither the PHY's clock nor the MAC's.
+
+A settle time between release and first MAC/MDIO access
+(`NET_PHY_RESET_SETTLE_US`, 1 ms) is an **implementation choice, not a
+datasheet minimum**, and is flagged as such in `Net/Inc/net_config.h`: the
+datasheet's only post-deassertion figures are `todad` (≤ 800 ns) and
+§3.8.5's note that the RMII interface runs at 2.5 MHz for the first 16 µs
+after reset. 1 ms is ~60× that, and costs nothing on a boot path.
+
+**Alternatives considered:**
+- *Leave `PB0` permanently HIGH (status quo)* — not adopted: works today
+  only because the LAN8720A's internal POR happens to cover cold
+  power-up; not a firmware-owned guarantee, and silently relies on PHY
+  behavior this project does not control.
+- *Use the general `trstia` minimum (~100 µs) with no added margin* — not
+  adopted: the project owner confirmed 150 µs specifically for margin
+  beyond the datasheet floor, consistent with this project's general
+  preference for margin over operating at a spec's exact minimum
+  (`Docs/MOTION-ENGINE.md` §7's DIR setup/hold margin note makes the same
+  choice).
+
+**Timing impact:** A one-time, boot-path-only 150 µs busy-wait before
+Ethernet init; no impact on STEP/DIR timing (unrelated subsystem, and
+occurs before the motion engine's timebase starts).
+
+**Memory impact:** None.
+
+**CPU impact:** Negligible — a single blocking delay executed once per
+boot/reset, not in any real-time path.
+
+**Risks:** None identified beyond the open implementation detail above
+(which delay primitive to use before the DWT counter's normal
+enablement point).
+
+**Validation result:** Firmware change done and compile-verified; hardware
+result still TBD. `HV-20` (`Docs/HARDWARE-VALIDATION.md`) now measures the
+assertion in CPU cycles on target and checks that `nRST` reads back
+released, so a delay loop that is silently too short fails a test rather
+than violating `trstia` unnoticed. What still needs the board: an
+oscilloscope capture of `PB0` confirming the pulse width, and PHY link-up
+on every reset path — warm/software MCU reset included, which is the case
+the status quo never covered.
+
+### ADR-014 — Motion Protocol v1 (`C5P1`) over UDP
+
+**Status:** ACCEPTED for Phase 3. The full wire format is
+`Docs/PROTOCOL.md`, which is authoritative; this ADR records only the
+decisions and the alternatives rejected, so the reasoning is not buried in
+a field table.
+
+**Context.** `Docs/FIRMWARE-IMPLEMENTATION-PLAN.md` §3 listed M13 (UDP) and
+M14 (protocol) as blocked on six items: port number, packet format, motion
+wire encoding, feedback format, backpressure mechanism and comm-timeout
+threshold. `Docs/MACH3-INTERFACE.md` §7 listed the same gaps from the host
+side. This ADR closes them.
+
+**Evidence used.** `SDK/ncPod/ExternalMovement.cpp` and `ncPODDriver.h` for
+the motion model (time-sliced per-axis velocity, 32 records ≈ 128 ms at
+≈50 Hz, host-side fractional carry, host sequence echoed in status,
+buffer-full backpressure with host retry, input/output bitfields and
+per-axis step positions in status). `SDK/Galil PlugIn/G100-Structs.h` for
+independent confirmation of the same shape from a second vendor, including
+a queue sequence kept separate from the message sequence, and a window
+field for flow control.
+
+**Decisions:**
+
+1. **UDP port 55010.** Arbitrary, in IANA's dynamic range, digits echoing
+   the device address `192.168.5.10`. No SDK evidence exists for a port —
+   `ncPod` is a USB device, and Galil's `13887` is that vendor's. Defined
+   once in `Firmware/Net/Inc/net_config.h`.
+2. **Little-endian wire.** `ncPod` byte-swaps because its PIC was
+   big-endian; a Cortex-M4 talking to an x86 PC has no such reason, and
+   copying the swap would cost work at both ends for nothing.
+3. **Motion carried as signed 1/65536-step-per-slice `int32` per axis**,
+   five axes, with the slice duration explicit in the packet. Keeps the
+   host free of the device's step scaling, and the device free of the
+   host's millimetre domain — the ADR-007 split. The device converts to
+   `motion_segment_t` with its own `tick_hz`; both the slice conversion and
+   the resulting rate are checked exactly, never clamped.
+4. **A motion sequence (`block_seq`) separate from the message sequence
+   (`seq`).** They answer different questions: a lost status poll is
+   harmless, a lost motion block is a missing piece of the toolpath. Galil
+   makes the same split.
+5. **A `block_seq` gap stops motion and latches a fault.** Skipping forward
+   would cut the wrong shape. Recovery is explicit, per ADR-010.
+6. **A motion block is accepted atomically.** Partial acceptance would make
+   a retry ambiguous, which is exactly how a half-applied block becomes a
+   wrong toolpath.
+7. **No NACK packet.** `STATUS` carries the rejection reason, so there is
+   one reply type and one state machine per side instead of two.
+8. **Comm timeout 200 ms, supervised only while motion is active.** Ten
+   host cycles at 50 Hz, and deliberately shorter than the ~256 ms a full
+   queue takes to drain, so a dead host is diagnosed as a timeout rather
+   than surfacing later as starvation. A quiet host between programs is not
+   a fault.
+9. **Corrupt packets get no reply.** If the CRC failed, the sequence number
+   in that packet is not trustworthy either.
+
+**Alternatives considered:**
+
+- *Forward `GMoves` verbatim* — rejected by ADR-007 already, and by the
+  evidence: the reference device does not do it either.
+- *Send the engine's Q32 rate directly on the wire* — rejected. It is the
+  cheapest possible decode, but it hard-codes the device's base tick into
+  the host's encoder, so a device running `stepgen_configure_max_rate()` at
+  1 MHz would execute every feed at double speed with nothing to detect it.
+- *Reuse `ncPod`'s opcode numbers* — rejected: they are that device's USB
+  API, and matching numbers would imply a compatibility this device does
+  not have.
+- *Treat a motion gap as recoverable and continue* — rejected; see 5.
+- *Per-record acknowledgement instead of per-block* — rejected as
+  bandwidth and state for no safety gain over atomic blocks.
+- *A TCP transport* — not considered seriously: `Docs/ETHERNET.md` §5 fixes
+  UDP, and the SDK's own socket wrapper shows UDP is what Mach3 plugins
+  use. Head-of-line blocking would also be the wrong failure mode for
+  motion.
+
+**Timing impact:** None on STEP generation. Decoding a full 32-record block
+is bounded work — 160 multiply/divide pairs, no allocation, no loops beyond
+`record_count` — and runs in the lwIP `NO_SYS` receive path, which executes
+in the `MX_LWIP_Process()` superloop, **not** in the ETH interrupt. It is
+preemptible by the STEP-DMA vector at NVIC priority 2 throughout (ADR-012).
+
+**Memory impact:** One UDP PCB, a 96-byte status packet built on the stack,
+and no new buffers. The motion queue is Phase 1's existing 64 slots.
+
+**Risks:**
+
+1. The whole protocol is exercised only against the host test suite and a
+   Python tool. Nothing has round-tripped over real Ethernet — that needs
+   the board (HV-30, `Docs/HARDWARE-VALIDATION.md`).
+2. `OUTPUTS` has a fixed wire format but no implementation behind it (M9 /
+   M10 do not exist). It is answered with `NOT_IMPLEMENTED` rather than
+   silently accepted.
+3. Rounding in the rate conversion leaves a bounded residual (under
+   4 × 10⁻⁶ steps per 4 ms slice). The host is expected to close the loop
+   from `pos_output[]`, as `ncPod`'s plugin does from its own `vtotal[]`.
+
+**Validation result:** Host tests pass; hardware TBD.
+
+---
+
+### ADR-015 — Digital Input Manager and the E-STOP Path
+
+**Status:** ACCEPTED for Phase 4 (M3). Implemented in `Firmware/Safety/`
+and `Firmware/Platform/*/Src/safety_port_*.c`.
+
+**Context.** Section 7 fixes the hardware (15 active-low inputs on
+`PE0`–`PE14`, external pull-ups, both-edge EXTI, `PE2` = E-STOP) and
+Section 20 requires a dedicated Input Manager, but both deliberately leave
+the handling method open: "the implementation must determine whether each
+input requires ... software filtering ... event latching ... immediate
+safety action". ADR-004 already fixed the interrupt priorities; ADR-010
+already fixed what an E-STOP does to the state machine, and added one
+clause the firmware could not yet honour — that `EMERGENCY_STOP` may only
+clear once the physical input has been released. This ADR decides the five
+things that were left open.
+
+**Decision.**
+
+1. **Level-based, never edge-count-based.** Every ISR re-reads `GPIOE->IDR`
+   and the superloop re-reads it again on each poll. Five of the six input
+   vectors are shared between lines, an EXTI pending bit can coalesce two
+   transitions, and a line can be masked by a self-test — under all three,
+   an edge *count* desynchronises and a level *read* does not. The one case
+   this also covers is the one that matters most: an E-STOP already held
+   down at power-on has no edge left to give, and only its level says so.
+
+2. **Assertion is immediate; release is filtered.** The 14 ordinary inputs
+   get a symmetric stable-for-`SAFETY_DEBOUNCE_MS` filter in both
+   directions. `PE2` does not: an assertion is acted on inside the EXTI2
+   ISR with no filtering at all, and only the *release* is filtered, over a
+   longer window (`SAFETY_ESTOP_RELEASE_MS`). The asymmetry is the safety
+   property. Filtering an assertion would add latency to the one path
+   Section 8 requires to be the fastest in the system; not filtering the
+   release would let a bouncing or intermittent contact present itself as
+   "released" and unlock a machine. Nothing about unlocking a machine is
+   time-critical, so the two directions are not allowed to share a number.
+
+3. **Published as logical assertion, not as pin level.** Every bitfield the
+   subsystem exposes — including `Docs/PROTOCOL.md` §6's `inputs` — uses
+   bit *n* = `PE`*n*, **1 = asserted**, i.e. the pin reads LOW. The
+   alternative, publishing raw levels, makes an all-zero word mean "every
+   input asserted", which is precisely the reading §6.2's `INPUTS_PRESENT`
+   flag exists to make impossible to confuse with "no data". It also keeps
+   the board's electrical polarity out of the host: the plugin applies
+   Mach3's own per-signal `Negated` flags to a logical word, exactly as
+   `ncPod` does with `PodStatus.inio` (`Docs/MACH3-INTERFACE.md` §4).
+
+4. **The E-STOP release interlock is a predicate the engine holds, not a
+   check at a call site.** ADR-010 requires that a clear be refused while
+   `PE2` still reads asserted. The motion engine owns the STEP/DIR pins and
+   cannot see `PE2`, so `stepgen_set_estop_gate()` takes a predicate and
+   `safety_input_init()` registers `safety_estop_released()` into it. The
+   interlock therefore exists as soon as the subsystem does and cannot be
+   forgotten by a caller — the protocol layer's `CONTROL:CLEAR_ESTOP` gets
+   it for free, and so does any future path.
+
+5. **No per-input meaning is assigned in firmware.** ADR-010 already
+   settled that the mapping from a pin to "X+ limit" or "probe" is
+   host-side (`Engine->InSigs[]`). M3 therefore reports all 15 states
+   accurately and promptly and decides nothing about them. The single
+   exception is `PE2`, whose meaning is fixed by `Docs/PINOUT.md` and
+   Section 8, not chosen here.
+
+**Chosen values (OPEN, not measured):** `SAFETY_DEBOUNCE_MS` = 3,
+`SAFETY_ESTOP_RELEASE_MS` = 50, `SAFETY_CHATTER_EDGES_PER_S` = 200. No
+switch datasheet exists in this repository, so these are documented
+defaults above typical mechanical bounce, not derived values. Rule 9
+applies: HV-45 replaces them with measured ones, and until it has run they
+must not be described as validated.
+
+**Alternatives considered:**
+
+- *Polling instead of EXTI* — rejected: Section 7 and `Docs/PINOUT.md` both
+  require interrupt handling, and a poll fast enough for E-STOP would cost
+  more than the interrupt it replaces.
+- *Debouncing the E-STOP assertion too* — rejected, see decision 2.
+- *Hardware RC filtering* — not rejected, out of scope: this is a firmware
+  document and the board is what it is. Software filtering is what M3 can
+  provide; if HV-45 finds a contact that needs hardware, that is a hardware
+  change.
+- *Publishing raw pin levels* — rejected, see decision 3.
+- *Checking the E-STOP input inside the protocol layer's `CLEAR_ESTOP`
+  handler* — rejected: it works, and it is one forgotten call site away
+  from not working. A registered predicate cannot be bypassed by adding a
+  second caller.
+- *Letting a released E-STOP clear itself* — rejected outright by ADR-010's
+  confirmed "recovery is never automatic". The release grants permission
+  for an explicit clear and does nothing else.
+
+**Timing impact:** The EXTI vectors sit at NVIC priority 0 (`PE2`) and 1
+(the rest), both **above** the STEP ring refill at 2 (ADR-004) — which is
+the point, and also means input ISR time is subtracted from the refill's
+128 µs deadline whenever an input moves. HV-43 measures that cost and HV-04
+holds the other half of the budget. The E-STOP path itself is HV-05 plus
+HV-18.
+
+**Memory impact:** ~250 bytes of static state (per-input filter timestamps
+and edge counters), no dynamic allocation, no new buffers.
+
+**CPU impact:** One `IDR` read plus a few instructions per edge; one pass
+over 15 bits per superloop iteration. A chattering contact is the only way
+this becomes significant, which is why it is counted and reported.
+
+**Risks:**
+
+1. The three timing constants are defaults, not measurements (see above).
+2. The debounce runs on the 1 ms `HAL_GetTick()` timebase, so the effective
+   window is `[T, T+1]` ms. Adequate at 3 ms; it would not be at 1 ms.
+3. `s.estop_asserted` is written by both the ISR (assert) and the release
+   timer (clear). The clear re-reads the pin immediately afterwards to
+   close that window rather than masking EXTI2, because a briefly deaf
+   E-STOP line is not an acceptable trade at any price. The residual window
+   is one port read wide.
+4. Everything above is verified on a host simulation of EXTI. Nothing has
+   been measured on silicon — HV-40..HV-43 and HV-18/HV-45 are the tests
+   that change that, and Rule 10 forbids claiming otherwise until they run.
+
+**Validation result:** Host tests pass (151 checks); hardware TBD.
+
+---
+
+### ADR-016 — Output Manager and Spindle PWM
+
+**Status:** ACCEPTED for Phase 5 (M9, M10). Implemented in `Firmware/IO/`
+and `Firmware/Platform/*/Src/io_port_*.c`.
+
+**Context.** Section 21 requires the non-motion outputs to be separated
+from the hard real-time STEP/DIR subsystem and reachable "without allowing
+background software to interfere with STEP/DIR timing". Section 22 requires
+the spindle to be a separate subsystem again, and explicitly leaves its
+frequency, duty-cycle range, scaling, command source and update mechanism
+to be derived from the project requirements and the Mach3 SDK. ADR-010
+fixed what faults do to the drives but said nothing about what they do to a
+relay or a spinning tool. This ADR decides the five things that were open.
+
+**Decision.**
+
+1. **One interlock governs both, and it is recomputed from the engine state
+   every superloop iteration.** Outputs are permitted only in `READY` and
+   `RUNNING`. The subsystem never caches a decision: `io_poll()` reads
+   `stepgen_get_status()` and applies the answer, so an output cannot
+   outlive the condition that permitted it, whatever raced with what.
+
+2. **Every fault class inhibits the outputs — including the two ADR-010
+   exempts from dropping `EN`.** That exemption exists so an axis does not
+   drift or drop under gravity when the command stream pauses; it is about
+   *holding force*. A spinning tool is not holding force. When the stream
+   stops the axes stop, and leaving the spindle turning then burns a
+   stationary tool into the work and leaves a machine doing work with
+   nobody driving it. `SAFE_IDLE` inhibits too: reaching `READY` takes an
+   explicit `CONTROL:ENABLE_DRIVES`, and that deliberate act is the point
+   at which the machine is live (§32).
+   *This extends an ADR-010 clause the project owner confirmed for `EN`
+   only, and is flagged for confirmation on that basis.*
+
+3. **Off is reached from the interrupt, not from the superloop.**
+   `io_emergency_off()` is register-writes-only and is registered with the
+   E-STOP path by `io_init()`, so the relay drops on the `PE2` edge. On a
+   machine whose relay is the spindle contactor, the difference between
+   that and one main-loop iteration later is the difference between a safe
+   stop and a dangerous one. An emergency stop also *discards* the pending
+   requests rather than withholding them, so clearing the stop cannot
+   re-energise anything by itself (ADR-010: recovery is never automatic).
+
+4. **Spindle scaling: none, and the SDK settles it.** `spindle_pmille`
+   (0…1000) is a direct quantisation of the SDK's own
+   `MainPlanner->Spindle.ratio`, which
+   `SDK/ncPod/MachDevImplementation.cpp` reads as "speed from 0 - 1" and
+   clamps at 1 `[SDK-CONFIRMED]`. RPM never reaches this device: the host
+   owns the RPM↔ratio map (`SpindleFM::SetSpindleSpeed`) because it is the
+   only side that knows what spindle is fitted. Out-of-range is **refused,
+   not clamped** — a host asking for 150 % has a bug, and quietly giving it
+   100 % hides that bug behind a spinning tool. Note that `ncPod` never
+   sends a zero duty while the spindle is on (`if (vel == 0) vel = 1;`);
+   that is host policy and is deliberately *not* replicated, because when
+   this device is told zero it means zero.
+
+5. **The PWM period is refined from the `.ioc`'s, the frequency is not.**
+   The `.ioc` carries `PSC=83`/`ARR=99`: exactly 10 kHz, but only 100 duty
+   steps, so a host asking for 12.3 % would silently get 12 %. This port
+   programs `PSC=0`/`ARR=8399` instead — identical 10.000 kHz, 8400 steps,
+   84× the resolution, no prescaler. The frequency is the only spindle
+   number `Docs/PINOUT.md` fixes and it is unchanged; HV-51 reads the
+   divider back from the hardware and reports the actual frequency in Hz.
+   The compare register is preloaded, so a duty change lands at a period
+   boundary and never produces a short or stretched pulse.
+
+**Also fixed here, because nothing else owned it:** the two status LEDs
+report the engine state and are **not** host-commandable. A host-controlled
+"error" light can be made to lie, and on a board with no display this pair
+is frequently the only thing that says anything at all. `FAULT` blinks and
+`EMERGENCY_STOP` is solid, deliberately — one is cleared with a command,
+the other needs somebody to release a physical button first, and telling
+them apart from across a workshop is worth a distinct pattern.
+
+**Chosen values (OPEN, not measured):** LED blink periods 500 ms (`READY`)
+and 125 ms (`FAULT`). `CNC_LED_ACTIVE_HIGH` = 1 is an assumption read from
+the CubeMX-generated reset state (both LEDs driven LOW at init); no LED
+drive circuit is documented in this repository. HV-55 confirms it on a
+board, and until then Rule 9 applies.
+
+**Alternatives considered:**
+
+- *Letting the ADR-010 hold-position exception cover the spindle* —
+  rejected, see decision 2. The exception's own stated reason does not
+  transfer.
+- *Permitting outputs in `SAFE_IDLE`* — rejected as the conservative
+  default. A host wanting coolant before arming the drives is a plausible
+  workflow that nothing in this repository actually asks for; if it turns
+  out to be needed, this is a one-line change to `compute_inhibit()` and
+  belongs in a revision of this ADR, not in a call site.
+- *Clamping an out-of-range duty* — rejected, see decision 4.
+- *Keeping the `.ioc`'s `ARR=99`* — rejected: it silently discards the
+  bottom digit of every duty the wire format can carry, for no benefit.
+- *Host-commandable LEDs* — rejected, see above.
+- *Applying an `OUTPUTS` packet partially when one field is bad* —
+  rejected: a host that asked for two things and got one has no way to
+  discover which.
+
+**Timing impact:** None on the motion path. The subsystem touches three
+GPIO bits and one compare register, none of which the STEP DMA path reads,
+and it runs entirely in the superloop except the E-STOP kill, which is a
+handful of register writes inside an interrupt that already exists.
+
+**Memory impact:** ~40 bytes of static state. No buffers, no allocation.
+
+**CPU impact:** One `stepgen_get_status()` copy and a few stores per
+superloop iteration.
+
+**Risks:**
+
+1. Decision 2 extends an owner-confirmed ADR-010 clause; it is the safe
+   direction, but it is this ADR's inference and not the owner's words.
+2. `CNC_LED_ACTIVE_HIGH` is an assumption (see above).
+3. The blink periods are defaults, not measurements.
+4. `PB4` is `NJTRST` at reset. This works only because the project debugs
+   over SWD (§29). Re-enabling JTAG would silently take the spindle pin.
+5. Everything is verified on a host simulation of GPIO and a timer.
+   Nothing has been measured on silicon — HV-50..HV-55 are the tests that
+   change that, and Rule 10 forbids claiming otherwise until they run.
+
+**Validation result:** Host tests pass (1160 checks); hardware TBD.
 
 # 42. AI-Assisted Development Rules
 

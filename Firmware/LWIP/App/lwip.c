@@ -28,7 +28,7 @@
 #include "ethernetif.h"
 
 /* USER CODE BEGIN 0 */
-
+#include "net_glue.h"
 /* USER CODE END 0 */
 /* Private function prototypes -----------------------------------------------*/
 static void ethernet_link_status_updated(struct netif *netif);
@@ -36,9 +36,6 @@ static void Ethernet_Link_Periodic_Handle(struct netif *netif);
 /* ETH Variables initialization ----------------------------------------------*/
 void Error_Handler(void);
 
-/* DHCP Variables initialization ---------------------------------------------*/
-uint32_t DHCPfineTimer = 0;
-uint32_t DHCPcoarseTimer = 0;
 /* USER CODE BEGIN 1 */
 
 /* USER CODE END 1 */
@@ -62,10 +59,10 @@ void MX_LWIP_Init(void)
   /* Initialize the LwIP stack without RTOS */
   lwip_init();
 
-  /* IP addresses initialization with DHCP (IPv4) */
-  ipaddr.addr = 0;
-  netmask.addr = 0;
-  gw.addr = 0;
+  /* IP addresses initialization without DHCP (IPv4) */
+  IP4_ADDR(&ipaddr, IP_ADDR0, IP_ADDR1, IP_ADDR2, IP_ADDR3);
+  IP4_ADDR(&netmask, NETMASK_ADDR0, NETMASK_ADDR1, NETMASK_ADDR2, NETMASK_ADDR3);
+  IP4_ADDR(&gw, GW_ADDR0, GW_ADDR1, GW_ADDR2, GW_ADDR3);
 
   /* add the network interface (IPv4/IPv6) without RTOS */
   netif_add(&gnetif, &ipaddr, &netmask, &gw, NULL, &ethernetif_init, &ethernet_input);
@@ -79,11 +76,14 @@ void MX_LWIP_Init(void)
   /* Set the link callback function, this function is called on change of link status*/
   netif_set_link_callback(&gnetif, ethernet_link_status_updated);
 
-  /* Start DHCP negotiation for a network interface (IPv4) */
-  dhcp_start(&gnetif);
-
 /* USER CODE BEGIN 3 */
-
+  /* Apply the static address from Net/Inc/net_config.h, whatever the
+   * generated code above did. This block is the one that survives a CubeMX
+   * regeneration, and the regression it guards against has already happened
+   * once here: the static configuration was lost in b409ba5 and the device
+   * would have come up on 0.0.0.0, waiting for a DHCP server that does not
+   * exist on this link. HV-24 fails if this is ever dropped. */
+  net_glue_apply_static_ip();
 /* USER CODE END 3 */
 }
 
@@ -111,6 +111,12 @@ static void Ethernet_Link_Periodic_Handle(struct netif *netif)
     ethernet_link_check_state(netif);
   }
 /* USER CODE BEGIN 4_4 */
+  /* Sample the link that ethernet_link_check_state() has just reconciled,
+   * so the rest of the firmware can read link state without touching lwIP.
+   * This block runs at main-loop rate, not every 100 ms - the call rate-
+   * limits itself, keeping that logic in project-owned code rather than in
+   * a marker CubeMX would not preserve. */
+  net_glue_poll_link();
 /* USER CODE END 4_4 */
 }
 

@@ -270,7 +270,7 @@ Recorded because both were silent-wrong-motion bugs, not build errors.
 | A-3 | DIR guard `g = 3` ticks | ADR-006 | HV-14 |
 | A-4 | Ring `N` = 1024 ticks | **ADR-008 leaves this open.** 1024 gives 256 µs ring, 128 µs deadline, 4 KB, 7.8 kHz ISR, 128–256 µs reversal latency | HV-04; smaller `N` cuts reversal latency but raises the ISR rate |
 | A-5 | Ethernet buffers will live in SRAM1 | Required for the SRAM2 bus isolation to mean anything | **Phase 2 must honour this** |
-| A-6 | `EN` (PD15) is active HIGH | `Docs/PINOUT.md`, owner-verified | Already resolved |
+| A-6 | `EN` (PD15) polarity | Originally active HIGH; superseded: owner's drivers are active LOW, default now `CNC_EN_ACTIVE_HIGH` = 0 | Resolved |
 | A-7 | Positive axis motion ⇒ DIR HIGH | §25 forbids assuming it, so it is a per-axis runtime parameter with this default | Machine configuration; likely settled with the plugin in Phase 4 |
 | A-8 | Segment queue depth 64 slots | ADR-008's ≥128 ms target is a *time*, and the slice duration is a Phase 3 protocol decision | Revisit once the protocol exists |
 
