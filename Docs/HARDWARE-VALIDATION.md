@@ -361,11 +361,16 @@ LED state at step C.
 
 *Preconditions.*
 1. Driver sockets empty, no motor, nothing on the relay.
-2. EN at boot: with `CNC_EN_ACTIVE_HIGH=0` and CubeMX resetting `PD15` LOW
-   in `MX_GPIO_Init()` (`Firmware/Core/Src/gpio.c:63`), the drives are
-   enabled from `MX_GPIO_Init()` until `stepgen_init()` takes over. Capture
-   `PD15` single-shot on power-up and read the HV-06 result. **Do not
-   connect a driver to this build until that is resolved.**
+2. EN at boot: HV-06b passed on `41c4888` (`PD15` HIGH in every state),
+   so this build is the one to test. A build older than `1aedb1d` enables
+   the drives for about two seconds at every boot and must not be used.
+3. The stimulus functions are not called by firmware, so the linker may
+   have discarded them (`--gc-sections`). In the Debugger Console run
+   `info address stepgen_stim_max_rate`. If it reports no symbol, turn off
+   "Discard unused sections" for the Debug configuration's MCU GCC Linker,
+   or add `-Wl,--undefined=stepgen_stim_max_rate` and the same for
+   `stepgen_stim_mixed_rates` to its other flags, then rebuild. Record
+   which one was used.
 
 *Method.* Logic analyser (≥ 100 MSa/s) on `PE2`, `PD15` and `PA8..PA12`
 (STEP X..B); trigger on the falling edge of `PE2`, 20 µs window, 20 %
@@ -849,7 +854,7 @@ replaced by an expectation.
 | HV-17 Pause holds with EN live | NOT RUN | — | — | ADR-010 |
 | HV-18 E-STOP response | PARTIAL | EN cut only, at idle (see ESTOP-01) | 2026-11-11 | STEP-in-motion and loaded-link halves still open: ESTOP-02, ESTOP-03. **The one that matters** |
 | ESTOP-01 EN cut, latch, explicit clear | **PASS** | worst PE2↓→PD15 disable Δt₁ = **1.55 µs** over 10 trials (1.40 µs max of first 5, 1.55 µs max of last 5) | 2026-11-11 (as reported) | Bench, drivers/motors/relay absent, no motion. HEAD `97df451`, `CNC_EN_ACTIVE_HIGH=0`. Steps A–F all as expected. Not reported: per-trial values, scope photo, PE2 fall time. |
-| HV-06b PD15 stays disabled from reset | NOT RUN | — | — | `PD15.PinState=GPIO_PIN_SET` applied in `.ioc` and `gpio.c`; needs the power-up and Reset single-shots. **Gate for ESTOP-02** |
+| HV-06b PD15 stays disabled from reset | **PASS** (as reported) | `PD15` stayed HIGH in reset, boot, idle and `EMERGENCY_STOP`; never LOW | 2026-11-12 | Build `41c4888` (`CNC_EN_ACTIVE_HIGH=0` default; `PD15.PinState=GPIO_PIN_SET` in `.ioc` and `gpio.c`), reflashed. Not reported: instrument, capture, or the HV-06 self-test readout (`CNC_RUN_SELFTEST_AT_BOOT` defaults to 0, so the self-test does not run unless enabled). The 'no LOW at power-up' claim rests on the report, not on a stored capture. |
 | ESTOP-02 STEP cut in motion | NOT RUN | — | — | Debugger-driven stimulus, no Ethernet load |
 | ESTOP-03 STEP cut under Ethernet load | NOT RUN | — | — | Host-driven via `Tools/c5p1.py`; needs HV-30/HV-33 first |
 | HV-20 PHY reset pulse | NOT RUN | — | — | ADR-013; also test a warm MCU reset |
